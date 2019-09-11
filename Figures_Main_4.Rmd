@@ -1,0 +1,288 @@
+---
+output: pdf_document
+---
+
+```{r global_options, include=FALSE}
+rm(list=ls()) ### To clear namespace
+library(knitr)
+opts_chunk$set(eval=TRUE, include = TRUE, echo = TRUE,
+               warning=FALSE, message=FALSE,
+               fig.width=8, fig.height=6)
+```
+
+
+# Development, stress response and recovery.
+
+```{r}
+require(dplyr)
+require(tidyr)
+require(ggplot2)
+require(stats)
+require(gridExtra)
+require(Hmisc)
+
+
+mytheme <- theme_bw() + theme(
+  legend.title  = element_text( size=17),
+  #  legend.position = "bottom",
+  #	legend.direction = "horizontal",
+  legend.key = element_blank(),
+  legend.text  = element_text( size=17),
+  panel.background = element_blank(),
+  panel.grid = element_blank(),
+  text = element_text( family="Helvetica", size=19),
+  panel.border = element_rect( colour = "black", size=2.5),
+  axis.ticks = element_line(size = 2.),
+  strip.background = element_rect( fill = "transparent", size = 2.5, colour = "black"  ),
+  strip.text = element_text(size = 19)
+)
+
+scalecols <- scale_colour_manual(values = c("#009900", "#FF0000", "#0000CC", "#FF8000", "#9933FF", "#00CCCC"))
+### very useful: http://www.rapidtables.com/web/color/RGB_Color.htm
+
+
+pca_timedata <- function( dfdata, control_type , first_column, last_column){
+  
+  dfdata <- dfdata %>% filter( ControlType == control_type ) 
+  rownames(dfdata) <- dfdata$rownumber
+  
+  dataforpca <- na.omit( # remove NAs
+    dfdata
+  )[,first_column:last_column]
+
+  # rescale the expression of all genes
+  #dataforpca <- t( scale(t(dataforpca) , center = TRUE, scale = FALSE  ) )
+  
+  pca <-prcomp(dataforpca,
+           center = TRUE,
+           scale = TRUE)
+
+  pcaresults <- as.data.frame(pca$rotation)
+  pcaresults$exprimnt <- rownames(pcaresults)
+  pcaresults <- pcaresults %>%
+    separate( exprimnt, c("codeexp","line","genotype", "batch" , "dye","experimentype", "abstime"),  sep = ":")
+
+  vectors <- pca$x
+  sdev <- pca$sdev
+  
+  B <- as.matrix(dataforpca)
+  Bsc <- scale(B)
+  Btsc <- scale(t(B))
+  
+  ordertimes <- order( do.call(cbind,strsplit(colnames(B),":"))[5,] )
+  colnames(B) <- do.call(cbind,strsplit(colnames(B),":"))[5,]
+    
+    output <- list( 
+    "sdev" = sdev,
+    "data" = B[,ordertimes],
+    "corrmatrixtimes" = (t(Bsc) %*% Bsc  / (dim(B)[1]-1))[ordertimes,ordertimes] ,
+    #"corrmatrixgenes" = t(Btsc) %*% Btsc  / dim(B)[2] ,
+    "projections" = pcaresults,
+    "vectors" = vectors
+    )
+  
+  return( output )
+  
+}
+
+```
+
+
+
+```{r}
+### IMPORT DATA ###
+
+dirin = "../../../Data/MicroArrays/"
+
+filedata <- paste(dirin,"allexperiments.Rdata",sep="")
+
+load(paste(dirin,"allexperiments.Rdata",sep=""))
+
+
+alldata_expr <- alldata_expr %>%
+  mutate( genotype = replace(genotype, genotype == "CB", "CB4856") )
+
+
+```
+
+
+
+
+
+
+```{r}
+### IMPORT AND NORMALIZE WITHIN ARRAYS ###
+
+filedata = "../../../Data/MicroArrays/projection_alldata.Rdata"
+load(filedata)
+
+filedata = "../../../Data/MicroArrays/projection_axis.Rdata"
+load(filedata)
+projection_all <- projection_all %>% filter(include == "in") %>%
+  mutate( genotype = replace(genotype, genotype == "CB", "CB4856") )
+
+
+
+```
+
+
+
+
+
+```{r}
+line_name <- list(
+  "NIL"="NILs",
+  "RIL"="RILs"
+)
+line_labeller <- function(variable,value){
+  return(line_name[value])
+}
+
+
+
+
+```
+
+
+
+```{r}
+filelifespan <- "../../../Data/LifeSpan/Lifespan_GRAPPLE.txt"
+lifespans_means <- read.csv( filelifespan, sep = "\t") %>%
+  rename(genotype = Genotype) 
+
+filelifespan_raw = "../../../Data/LifeSpan/Raw/Mark_files on RIL/LifespanRaw_Grapple.txt"
+lifespan.data <- read.csv(file=filelifespan_raw,sep = "\t") %>% filter(Use_data != "CRAP")
+
+```
+
+
+
+```{r}
+allprojection_lifespan <- inner_join(lifespans_means %>% mutate( genotype = toupper(genotype) ) %>%
+                                       select( genotype, Treatment, life.mean  ) %>%
+                                       spread( Treatment, life.mean  ),
+                                     projection_all %>% mutate( genotype = toupper(genotype) ) )
+
+allprojection_reduced <- allprojection_lifespan %>%
+  filter( (experimentype == "Dev" & abstime == 46) | (experimentype == "HS" & abstime == 48) |
+            (experimentype == "Rec" & abstime == 50) , include == "in"  ) %>%
+  select( -codeexp, -dye, -batch, agebeginshock, -shockduration, -abstime, -include, -agebeginshock, -rec_RILs_projection ) %>%
+  group_by(genotype,ct, hs, line, experimentype) %>%
+  summarize_each(funs(mean)) %>%
+  ungroup() 
+
+rec_proj <- allprojection_reduced %>% filter( line == "RIL" | line == "NIL" , experimentype == "Rec" )
+
+p1 <- ggplot( rec_proj ) + mytheme+
+                   aes(
+                      x = hs_RILs_projection,
+                      y = hs/ct,
+                      colour = as.factor(line),
+                      shape = as.factor(line)                      
+                  ) +
+            geom_smooth( method = "lm", colour = "#606060", se = FALSE, size = 3, alpha = 0.7) +
+    geom_point( size = 6 , alpha = 0.7 ) +
+  scale_colour_manual(values = c("#FF8000", "#990099",  "#4C9900") ) +
+  scale_y_continuous( name = "Ratio between average lifetime \n after  heat-shock and without" ) +
+  scale_x_continuous( name = "Projection on genetic\nheat-shock axis" ) +
+  theme(legend.position = "bottom") +
+  guides(colour = guide_legend(override.aes = list(alpha = 1), title = "line"), size = FALSE) +
+  facet_wrap( ~ line, ncol = 1 , scale = "free_x") + theme(legend.position = "none")
+show(p1)
+
+filenameout = "../../../Figures/Main/Fig4/reclifespan.pdf"
+pdf(filenameout,height=7.69,width=4.38)
+print(p1)
+dev.off()
+
+```
+
+```{r}
+
+lifespan.data.2 <- cbind(lifespan.data[,c(1:9)],abs(data.matrix(lifespan.data[,-c(1:9)])-data.matrix(lifespan.data[,-c(1:8, ncol(lifespan.data))])))
+
+lifespans_distr <- mutate(lifespan.data,n=X51) %>%
+             gather(key="day",value="dead",-c(Genotype:Comment),-n) %>%
+             mutate(day=as.numeric(gsub("X","",day)),alive=n-dead,perc_alive=(n-dead)/n*100)
+#And I merge this list with the deaths per day
+lifespans_distr <- gather(lifespan.data.2,key="day",value="dead_per_day",-c(Genotype:Comment)) %>%
+             mutate(day=as.numeric(gsub("X","",day))) %>%
+             merge(lifespans_distr)
+
+lifespans_distr <-lifespans_distr %>% rename( genotype = Genotype, line = Type ) 
+```
+
+```{r}
+
+p2 <- ggplot(  ) + mytheme +
+      geom_line(
+    data = lifespans_distr %>% filter( Treatment == "ct", (line == "RIL"), genotype != "WN036" ) %>% group_by(genotype, line,day, Treatment) %>%
+              dplyr::summarize( fracalive = mean(perc_alive)/100. ) %>%
+              ungroup() ,
+  aes(
+    x = day,
+    y = fracalive,
+    colour = as.factor(line),
+    group = as.factor(genotype)
+  ) , size = 0.75, alpha = 0.25) +
+      geom_line(
+    data = lifespans_distr %>% filter( Treatment == "ct", (line == "RIL" ) ) %>% group_by(line,day, Treatment) %>%
+              dplyr::summarize( fracalive = mean(perc_alive)/100. ) %>%
+              ungroup() ,
+  aes(
+    x = day,
+    y = fracalive,
+    colour = as.factor(line),
+    group = as.factor(line)
+  ) , size = 3, alpha = 1) +
+  scale_colour_manual(values = c( "#0000FF","#0066CC") ) +
+  theme( legend.position = "none" ) +
+      scale_x_continuous(
+    name = "day d [days]"
+  ) +   scale_y_continuous( name = "fraction of worms alive at day d"  ) +
+  facet_wrap( ~ line)
+show(p2)
+
+filenameout = "../../../Figures/Main/Fig4/RILs_ct_lifespan.pdf"
+pdf(filenameout,height=4.7,width=5)
+print(p2)
+dev.off()
+
+```
+
+```{r}
+p2 <- ggplot(  ) + mytheme +
+      geom_line(
+    data = lifespans_distr %>% filter( Treatment == "hs", (line == "RIL"), genotype != "WN036" ) %>% group_by(genotype, line,day, Treatment) %>%
+              dplyr::summarize( fracalive = mean(perc_alive)/100. ) %>%
+              ungroup() ,
+  aes(
+    x = day,
+    y = fracalive,
+    colour = as.factor(line),
+    group = as.factor(genotype)
+  ) , size = 0.75, alpha = 0.25) +
+      geom_line(
+    data = lifespans_distr %>% filter( Treatment == "hs", (line == "RIL" ) ) %>% group_by(line,day, Treatment) %>%
+              dplyr::summarize( fracalive = mean(perc_alive)/100. ) %>%
+              ungroup() ,
+  aes(
+    x = day,
+    y = fracalive,
+    colour = as.factor(line),
+    group = as.factor(line)
+  ) , size = 3, alpha = 1) +
+  scale_colour_manual(values = c( "#FF0000","#0066CC") ) +
+  theme( legend.position = "none" ) +
+      scale_x_continuous(
+    name = "day d [days]"
+  ) +   scale_y_continuous( name = "fraction of worms alive at day d"  ) +
+  facet_wrap( ~ line)
+show(p2)
+
+filenameout = "../../../Figures/Main/Fig4/RILs_hs_lifespan.pdf"
+pdf(filenameout,height=4.7,width=5)
+print(p2)
+dev.off()
+```
+

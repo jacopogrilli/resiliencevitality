@@ -1,0 +1,1590 @@
+---
+output: pdf_document
+---
+
+```{r global_options, include=FALSE}
+rm(list=ls()) ### To clear namespace
+library(knitr)
+opts_chunk$set(eval=TRUE, include = TRUE, echo = TRUE,
+               warning=FALSE, message=FALSE,
+               fig.width=8, fig.height=6)
+```
+
+
+# Development, stress response and recovery.
+
+```{r}
+require(dplyr)
+require(tidyr)
+require(ggplot2)
+require(stats)
+require(gridExtra)
+require(Hmisc)
+
+
+mytheme <- theme_bw() + theme(
+  legend.title  = element_text( size=17),
+  #  legend.position = "bottom",
+  #	legend.direction = "horizontal",
+  legend.key = element_blank(),
+  legend.text  = element_text( size=17),
+  panel.background = element_blank(),
+  panel.grid = element_blank(),
+  text = element_text( family="Helvetica", size=19),
+  panel.border = element_rect( colour = "black", size=2.5),
+  axis.ticks = element_line(size = 2.),
+  strip.background = element_rect( fill = "transparent", size = 2.5, colour = "black"  ),
+  strip.text = element_text(size = 19)
+)
+
+scalecols <- scale_colour_manual(values = c("#009900", "#FF0000", "#0000CC", "#FF8000", "#9933FF", "#00CCCC"))
+### very useful: http://www.rapidtables.com/web/color/RGB_Color.htm
+
+
+pca_timedata <- function( dfdata, control_type , first_column, last_column){
+  
+  dfdata <- dfdata %>% filter( ControlType == control_type ) 
+  rownames(dfdata) <- dfdata$rownumber
+  
+  dataforpca <- na.omit( # remove NAs
+    dfdata
+  )[,first_column:last_column]
+
+  # rescale the expression of all genes
+  #dataforpca <- t( scale(t(dataforpca) , center = TRUE, scale = FALSE  ) )
+  
+  pca <-prcomp(dataforpca,
+           center = TRUE,
+           scale = TRUE)
+
+  pcaresults <- as.data.frame(pca$rotation)
+  pcaresults$exprimnt <- rownames(pcaresults)
+  pcaresults <- pcaresults %>%
+    separate( exprimnt, c("codeexp","line","genotype", "batch" , "dye","experimentype", "abstime"),  sep = ":")
+
+  vectors <- pca$x
+  sdev <- pca$sdev
+  
+  B <- as.matrix(dataforpca)
+  Bsc <- scale(B)
+  Btsc <- scale(t(B))
+  
+  ordertimes <- order( do.call(cbind,strsplit(colnames(B),":"))[5,] )
+  colnames(B) <- do.call(cbind,strsplit(colnames(B),":"))[5,]
+    
+    output <- list( 
+    "sdev" = sdev,
+    "data" = B[,ordertimes],
+    "corrmatrixtimes" = (t(Bsc) %*% Bsc  / (dim(B)[1]-1))[ordertimes,ordertimes] ,
+    #"corrmatrixgenes" = t(Btsc) %*% Btsc  / dim(B)[2] ,
+    "projections" = pcaresults,
+    "vectors" = vectors
+    )
+  
+  return( output )
+  
+}
+
+```
+
+
+
+```{r}
+### IMPORT DATA ###
+
+dirin = "../../../Data/MicroArrays/"
+
+filedata <- paste(dirin,"allexperiments.Rdata",sep="")
+
+load(paste(dirin,"allexperiments.Rdata",sep=""))
+
+
+alldata_expr <- alldata_expr %>%
+  mutate( genotype = replace(genotype, genotype == "CB", "CB4856") ) %>% 
+  mutate( line = replace(line, line == "NIL", "IL") )
+
+
+```
+
+
+
+##Development - distribution of expressions
+
+```{r}
+
+data_development <- alldata_expr %>%
+  filter( include == "in", experimentype == "Dev", genotype == "N2" ) %>%
+  select(-GeneName)
+
+devspread <- data_development %>%
+  unite( idexp , codeexp, line, genotype, batch, dye, experimentype, abstime, sep = ":"  ) %>%
+  mutate( logintensity = log(intensity) ) %>%
+  dplyr::select(-include, -intensity,
+         -agebeginshock, -shockduration) %>%
+  spread( idexp, logintensity ) 
+
+threshold_expression = 4.5
+
+p <- ggplot() + mytheme + 
+  geom_vline(xintercept = threshold_expression, colour = "gray", size = 2) +
+  geom_freqpoly( 
+    data =  data_development %>% filter( ControlType == 0, (batch=="set11" | batch=="set13"), intensity > 0 ) ,
+    aes(
+    x = log(intensity),
+    y = ..density..,
+    group = as.factor(codeexp),
+    colour = as.factor( batch )
+  ) , size  = 1.3, alpha = 0.3 ) +
+    geom_freqpoly( 
+    data =  data_development %>% filter( ControlType == 0, (batch=="set11" | batch=="set13"), intensity > 0) %>%
+                                         group_by(rownumber, batch) %>% dplyr::summarize(logmeanintensity=mean(log(intensity)))
+                                          ,
+    aes(
+    x = logmeanintensity,
+    y = ..density..,
+    group = as.factor(batch),
+        colour = as.factor( batch )
+  ) , size  = 2,  alpha = 1) +
+  scale_y_continuous( name = "Fraction of genes"  ) +
+  scale_x_continuous( name = "logarithm of expression level"  ) +
+  theme(legend.position = "bottom") +
+  scale_colour_manual(values = c("#0000FF", "#48D1CC") , guide = guide_legend(title = "Batch")) 
+show(p)
+
+filenameout = "../../../Figures/SI/Distr_devN2.pdf"
+pdf(filenameout,height=6,width=7)
+print(p)
+dev.off()
+
+```
+
+
+
+
+```{r}
+### IMPORT AND NORMALIZE WITHIN ARRAYS ###
+
+filedata = "../../../Data/MicroArrays/projection_alldata.Rdata"
+load(filedata)
+
+filedata = "../../../Data/MicroArrays/projection_axis.Rdata"
+load(filedata)
+projection_all <- projection_all %>% filter(include == "in") %>%
+  mutate( genotype = replace(genotype, genotype == "CB", "CB4856") ) %>% 
+    mutate( line = replace(line, line == "NIL", "IL") )
+
+
+
+
+```
+
+
+
+```{r}
+devset_averaged <- data_development %>%
+  filter( ControlType == 0, ( batch=="set13" | batch=="set11" ) , intensity > 0) %>%
+  group_by(rownumber, batch) %>% dplyr::summarize(logmeanintensity=mean(log(intensity))) %>%
+  ungroup()
+
+devspread_set13 <- data_development %>%
+  filter( batch == "set13" ) %>%
+  unite( idexp , codeexp,line, genotype, batch, dye, experimentype, abstime, sep = ":"  ) %>%
+  mutate( logintensity = log(intensity) ) %>%
+  dplyr::select(-include, -intensity,
+         -agebeginshock, -shockduration) %>%
+  spread( idexp, logintensity ) 
+
+
+large_espression_genes_set13 <- devset_averaged %>%
+  filter(logmeanintensity > threshold_expression, batch == "set13")
+
+largegenes_set13 <- large_espression_genes_set13$rownumber
+
+devspread_set13 <- devspread_set13 %>%
+  filter( rownumber %in% largegenes_set13 )
+
+empirical.reduced <- pca_timedata( devspread_set13, 0 , 4, 11 ) 
+
+first_vect <- -empirical.reduced$vectors[,1]
+normalization <- sqrt(  t(first_vect) %*% first_vect )
+firstaxis_dev <- as.data.frame( first_vect ) 
+firstaxis_dev$rownumber <- as.integer( rownames( empirical.reduced$vectors) )
+firstaxis_dev <- firstaxis_dev %>%
+  mutate( component = first_vect / normalization ) %>%
+  select( -first_vect )
+
+axis_vs_average <- left_join(devset_averaged,firstaxis_dev)
+
+
+p <- ggplot( axis_vs_average %>% arrange(rownumber) %>% head(n=15000) ) + mytheme + 
+    aes(
+    x = logmeanintensity,
+    y = component,
+    colour = as.factor(batch)
+  ) +
+  geom_point(size  = 3, alpha = 0.05 ) +
+  scale_y_continuous( name = "Component of the first principal axis"  ) +
+  scale_x_continuous(limits = c(2,12.5), name = "Average logarithm of gene expression" ) +
+  theme(legend.position = "bottom") +
+  guides(colour = guide_legend(override.aes = list(alpha = 1), title = "Batch")) +
+  scale_colour_manual(values = c("#0000FF", "#48D1CC") ) +
+  annotate("text", x = 2.05, y = 0.019, label = "A", size = 15)
+show(p)
+pfirst <- p
+
+
+devset_averaged <- data_development %>%
+  filter( ControlType == 0, ( batch=="set13" | batch=="set11" ) , intensity > 0) %>%
+  group_by(rownumber, batch) %>% dplyr::summarize(logmeanintensity=mean(log(intensity))) %>%
+  ungroup()
+
+devspread_set13 <- data_development %>%
+  filter( batch == "set13" ) %>%
+  unite( idexp , codeexp,line, genotype, batch, dye, experimentype, abstime, sep = ":"  ) %>%
+  mutate( logintensity = log(intensity) ) %>%
+  dplyr::select(-include, -intensity,
+         -agebeginshock, -shockduration) %>%
+  spread( idexp, logintensity ) 
+
+
+large_espression_genes_set13 <- devset_averaged %>%
+  filter(logmeanintensity > threshold_expression, batch == "set13")
+
+largegenes_set13 <- large_espression_genes_set13$rownumber
+
+devspread_set13 <- devspread_set13 %>%
+  filter( rownumber %in% largegenes_set13 )
+
+empirical.reduced <- pca_timedata( devspread_set13, 0 , 4, 11 ) 
+
+first_vect <- -empirical.reduced$vectors[,2]
+normalization <- sqrt(  t(first_vect) %*% first_vect )
+firstaxis_dev <- as.data.frame( first_vect ) 
+firstaxis_dev$rownumber <- as.integer( rownames( empirical.reduced$vectors) )
+firstaxis_dev <- firstaxis_dev %>%
+  mutate( component = first_vect / normalization ) %>%
+  select( -first_vect )
+
+axis_vs_average <- left_join(devset_averaged,firstaxis_dev)
+
+
+p <- ggplot( axis_vs_average %>% head(n=15000) %>% arrange(component) ) + mytheme + 
+    aes(
+    x = logmeanintensity,
+    y = component,
+    colour = as.factor(batch)
+  ) +
+  geom_point(size  = 3, alpha = 0.05 ) +
+  scale_y_continuous( name = "Component of the second principal axis"  ) +
+  scale_x_continuous(limits = c(2,12.5), name = "Average logarithm of gene expression" ) +
+  theme(legend.position = "bottom") +
+  guides(colour = guide_legend(override.aes = list(alpha = 1), title = "Batch")) +
+  scale_colour_manual(values = c("#0000FF", "#48D1CC") )  +
+  annotate("text", x = 2.0, y = 0.038, label = "B", size = 15)
+show(p)
+psecond <- p
+
+
+filenameout = "../../../Figures/SI/axisvsaverage_dev.pdf"
+pdf(filenameout,height=6,width=14)
+grid.arrange( arrangeGrob(pfirst,psecond,ncol=2) )
+dev.off()
+
+
+
+```
+
+
+```{r}
+p1 <- ggplot(  projection_all %>%
+                filter(experimentype == "Dev", genotype == "N2" , include == "in") %>%
+                mutate( batch = replace(batch,(batch!="set11" & batch!="set13"),"other" ) )
+                ) + mytheme +
+  aes(
+    x = as.numeric(abstime),
+    y = devprojection
+  ) +
+  stat_smooth(method = "lm", formula =  y ~ poly(x, 2),
+              size = 2, se = FALSE,
+              colour = "gray" ) +
+  geom_point( aes(
+    colour =as.factor(batch),
+    shape = as.factor(batch) 
+    ), size = 6, alpha = 0.7 ) +
+   scale_y_continuous( name = "Projection on develpmental axis D\n[arbitrary units]"  ) +
+    scale_x_continuous( name = "Time [hours after\nage syncronization]"  ) +
+  theme(legend.position=c(0.9,0.18)) +
+   guides(shape = guide_legend( title = "batch"), colour = guide_legend( title = "batch")) +
+    scale_colour_manual(values = c("#404040","#0000FF", "#48D1CC") ) +
+  annotate("text", x = 44.1, y = 65, label = "A", size = 15)
+show(p1)
+
+
+
+p2 <- ggplot(  projection_all %>%
+                filter(line == "PL", experimentype == "Dev", include == "in") %>%
+                mutate( batch = replace(batch,(batch!="set11" & batch!="set13"),"other" ) ) %>%
+                arrange( desc(genotype) )
+                ) + mytheme +
+  aes(
+    x = as.numeric(abstime),
+    y = devprojection
+  ) +
+  stat_smooth(method = "lm", formula =  y ~ poly(x, 2),
+              size = 2, se = FALSE,
+              colour = "gray" ) +
+  geom_point( aes(
+    colour =as.factor(genotype),
+    shape = as.factor(genotype) 
+    ), size = 6, alpha = 0.7 ) +
+   scale_y_continuous( name = "Projection on develpmental axis D\n[arbitrary units]"  ) +
+    scale_x_continuous( name = "Time [hours after\nage syncronization]"  ) +
+  theme(legend.position=c(0.88,0.18)) +
+   guides(shape = guide_legend( title = "genotype"), colour = guide_legend( title = "genotype")) +
+    scale_colour_manual(values = c("#FF8000", "#009900", "#404040") ) +
+  annotate("text", x = 44.1, y = 65, label = "B", size = 15)
+show(p2)
+
+filenameout = "../../../Figures/SI/dev_axis_projection.pdf"
+pdf(filenameout,height=5,width=14)
+grid.arrange( arrangeGrob(p1,p2,ncol=2) )
+dev.off()
+
+```
+
+
+
+
+
+
+
+```{r}
+data_heatshock <- alldata_expr %>%
+  filter( include == "in", experimentype == "HS", genotype == "N2" ) %>%
+  select(-GeneName)
+
+hsset1_averaged <- data_heatshock %>%
+  filter( ControlType == 0, intensity > 0) %>%
+  group_by(rownumber, batch) %>% dplyr::summarize(logmeanintensity=mean(log(intensity))) %>%
+  ungroup()
+
+hsspread_set1 <- data_heatshock %>%
+  filter( batch == "set1" ) %>%
+  unite( idexp , codeexp,line, genotype, batch, dye, experimentype, abstime, sep = ":"  ) %>%
+  mutate( logintensity = log(intensity) ) %>%
+  dplyr::select(-include, -intensity,
+         -agebeginshock, -shockduration) %>%
+  spread( idexp, logintensity ) 
+
+
+large_espression_genes_set1 <- hsset1_averaged %>%
+  filter(logmeanintensity > threshold_expression, batch == "set1")
+
+largegenes_set1 <- large_espression_genes_set1$rownumber
+
+hsspread_set1 <- hsspread_set1 %>%
+  filter( rownumber %in% largegenes_set1 )
+
+empirical.reduced <- pca_timedata( hsspread_set1, 0 , 4, 11 ) 
+
+first_vect <- -empirical.reduced$vectors[,1]
+normalization <- sqrt(  t(first_vect) %*% first_vect )
+firstaxis_hs <- as.data.frame( first_vect ) 
+firstaxis_hs$rownumber <- as.integer( rownames( empirical.reduced$vectors) )
+firstaxis_hs <- firstaxis_hs %>%
+  mutate( component = first_vect / normalization ) %>%
+  select( -first_vect )
+
+axis_vs_average <- left_join(hsset1_averaged,firstaxis_hs)
+
+
+p <- ggplot( axis_vs_average %>%  head(n = 70000) %>% arrange(component) ) + mytheme + 
+    aes(
+    x = logmeanintensity,
+    y = component,
+    colour = as.factor(batch),
+    group = as.factor(paste(round(logmeanintensity*2),batch))
+  ) +
+  geom_point(size  = 3, alpha = 0.05 ) +
+  scale_y_continuous( name = "Component of the first principal axis"  ) +
+  scale_x_continuous(limits = c(2,12.5), name = "Average logarithm of gene expression" ) +
+  theme(legend.position = "bottom") +
+  scale_colour_manual(values = c("#FF0000","#FF8000", "#8B0000" ,"#FF4500","#DAA520","#FF1493","#DC143C") ) +
+  guides(colour = guide_legend(override.aes = list(alpha = 1), title = "Batch")) 
+
+show(p)
+
+filenameout = "../../../Figures/SI/axisvsaverage_hs.pdf"
+pdf(filenameout,height=6,width=7)
+print(p)
+dev.off()
+```
+
+
+
+```{r}
+p1 <- ggplot(  projection_all %>%
+                filter(experimentype == "HS", genotype == "N2" , include == "in") )+
+  mytheme +
+  aes(
+    x = as.numeric(abstime),
+    y = hsprojection
+  ) +
+  geom_point( aes(
+    colour =as.factor(batch),
+    fill =as.factor(batch),
+    shape = as.factor(batch) 
+    ), size = 4, alpha = 1 , stroke = 2) +
+    stat_smooth( data = projection_all %>%
+                filter(experimentype == "HS", genotype == "N2" ),
+                  aes(
+    x = as.numeric(abstime),
+    y = hsprojection
+  ),
+                se = FALSE , linetype = 1, colour = "gray", size = 2 ) +
+   scale_y_continuous( name = "Projection of heat-stress axis H\n[arbitrary units]"  ) +
+    scale_x_continuous( name = "Time [hours after\nage syncronization]"  ) +
+  theme(legend.position=c(0.9,0.25)) +
+   guides(shape = guide_legend( title = "batch"), colour = guide_legend( title = "batch"), fill = guide_legend( title = "batch")) +
+    scale_colour_manual(values = c("#FF0000","#FF8000", "#8B0000" ,"#FF4500","#DAA520","#FF1493","#DC143C") ) +
+    scale_fill_manual(values = c("#FF0000","#FF8000", "#8B0000" ,"#FF4500","#DAA520","#FF1493","#DC143C") ) +
+    scale_shape_manual(values = c(21,22,23,24,25,0,1,2)  ) +
+  annotate("text", x = 46, y = 65, label = "A", size = 15)
+show(p1)
+
+
+
+p2 <- ggplot(  projection_all %>%
+                filter(line == "PL", experimentype == "HS") %>%
+                arrange( desc(genotype) )
+                ) + mytheme +
+  aes(
+    x = as.numeric(abstime),
+    y = hsprojection
+  ) +
+    stat_smooth( data = projection_all %>%
+                filter(experimentype == "HS", genotype == "N2" ),
+                  aes(
+    x = as.numeric(abstime),
+    y = hsprojection
+  ),
+                se = FALSE , linetype = 1, colour = "gray", size = 2 )+
+  geom_point( aes(
+    colour =as.factor(genotype),
+    shape = as.factor(genotype) 
+    ), size = 6, alpha = 0.7 ) +
+   scale_y_continuous( name = "Projection of heat-stress axis H\n[arbitrary units]"  ) +
+    scale_x_continuous( name = "Time [hours after\nage syncronization]"  ) +
+  theme(legend.position=c(0.9,0.15)) +
+   guides(shape = guide_legend( title = "genotype"), colour = guide_legend( title = "genotype")) +
+    scale_colour_manual(values = c("#FF8000", "#404040") ) +
+  annotate("text", x = 46, y = 65, label = "B", size = 15)
+show(p2)
+
+
+filenameout = "../../../Figures/SI/hs_axis_projection.pdf"
+pdf(filenameout,height=5,width=14)
+grid.arrange( arrangeGrob(p1,p2,ncol=2) )
+dev.off()
+
+```
+
+
+
+```{r}
+p1 <- ggplot(  projection_all %>%
+                filter(experimentype == "Rec", genotype == "N2" ) )+
+  mytheme +
+  aes(
+    x = as.numeric(abstime),
+    y = hsprojection
+  ) +
+  geom_point( aes(
+    colour =as.factor(batch),
+    fill =as.factor(batch),
+    shape = as.factor(batch) 
+    ), size = 4, alpha = 1 , stroke = 2) +
+    stat_smooth( data = projection_all %>%
+                filter(experimentype == "Rec", genotype == "N2" ),
+                  aes(
+    x = as.numeric(abstime),
+    y = hsprojection
+  ),
+                se = FALSE , linetype = 1, colour = "gray", size = 2 ) +
+   scale_y_continuous( name = "Projection of heat shock axis H\n[arbitrary units]"  ) +
+    scale_x_continuous( name = "Time [hours after\nage syncronization]"  ) +
+  theme(legend.position=c(0.1,0.2)) +
+   guides(shape = guide_legend( title = "batch"), colour = guide_legend( title = "batch"), fill = guide_legend( title = "batch")) +
+    scale_colour_manual(values = c("#32CD32", "#66CDAA" ,"#008000","#6B8E23") ) +
+    scale_fill_manual(values = c("#32CD32", "#66CDAA" ,"#008000","#6B8E23") ) +
+    scale_shape_manual(values = c(21,22,23,24,25,0,1,2)  ) +
+  annotate("text", x = 54, y = 18, label = "A", size = 15)
+show(p1)
+
+
+
+p2 <- ggplot(  projection_all %>%
+                filter(line == "PL", genotype != "JU1941" , experimentype == "Rec") %>%
+                arrange( desc(genotype) )
+                ) + mytheme +
+  aes(
+    x = as.numeric(abstime),
+    y = hsprojection
+  ) +
+    stat_smooth( data = projection_all %>%
+                filter(experimentype == "Rec", genotype == "N2" ),
+                  aes(
+    x = as.numeric(abstime),
+    y = hsprojection
+  ),
+                se = FALSE , linetype = 1, colour = "gray", size = 2 )+
+  geom_point( aes(
+    colour =as.factor(genotype),
+    shape = as.factor(genotype) 
+    ), size = 6, alpha = 0.7 ) +
+   scale_y_continuous( name = "Projection of heat-stress axis H\n[arbitrary units]"  ) +
+    scale_x_continuous( name = "Time [hours after\nage syncronization]"  ) +
+  theme(legend.position=c(0.1,0.15)) +
+   guides(shape = guide_legend( title = "genotype"), colour = guide_legend( title = "genotype")) +
+    scale_colour_manual(values = c("#FF8000", "#404040") ) +
+  annotate("text", x = 54, y = 18, label = "B", size = 15)
+show(p2)
+
+
+filenameout = "../../../Figures/SI/rec_axis_projection.pdf"
+pdf(filenameout,height=5,width=14)
+grid.arrange( arrangeGrob(p1,p2,ncol=2) )
+dev.off()
+
+```
+
+
+```{r}
+p1 <- ggplot(  projection_all %>%
+                filter( include == "in", genotype != "JU1941", line == "PL" ) %>%
+               mutate( wasused = (batch == "set13" | batch == "set1"  )  )
+               )+
+  mytheme +
+  aes(
+    x = as.numeric(abstime),
+    y = hsprojection
+  ) +
+  geom_point( aes(
+    colour =as.factor(experimentype),
+    shape = as.factor(wasused) 
+    ), size = 4, alpha = 1 , stroke = 2) +
+   scale_y_continuous( name = "Projection of heat-stress axis H\n[arbitrary units]"  ) +
+    scale_x_continuous( name = "Time [hours after\nage syncronization]"  ) +
+  theme(legend.position="bottom") +
+   guides(shape = guide_legend( title = "Used to determin the axis"), colour = guide_legend( title = "Experiment type")) +
+     scale_colour_manual(values = c("#0000FF", "#FF0000" ,"#008000","#6B8E23") ) +
+    scale_shape_manual(values = c(0,8)  ) +
+    annotate("text", x = 44, y = 64, label = "A", size = 15)
+show(p1)
+
+p2 <- ggplot(  projection_all %>%
+                filter( include == "in", genotype != "JU1941", line == "PL" ) %>%
+               mutate( wasused = (batch == "set13" | batch == "set1"  )  )
+               )+
+  mytheme +
+  aes(
+    x = as.numeric(abstime),
+    y = devprojection
+  ) +
+  geom_point( aes(
+    colour =as.factor(experimentype),
+    shape = as.factor(wasused) 
+    ), size = 4, alpha = 1 , stroke = 2) +
+   scale_y_continuous( name = "Projection on development axis D\n[arbitrary units]"  ) +
+    scale_x_continuous( name = "Time [hours after\nage syncronization]"  ) +
+  theme(legend.position="bottom") +
+   guides(shape = guide_legend( title = "Used to determin the axis"), colour = guide_legend( title = "Experiment type")) +
+     scale_colour_manual(values = c("#0000FF", "#FF0000" ,"#008000","#6B8E23") ) +
+    scale_shape_manual(values = c(0,8)  ) +
+    annotate("text", x = 44, y = 61, label = "B", size = 15)
+show(p2)
+
+filenameout = "../../../Figures/SI/allaxis_whichused_hs.pdf"
+pdf(filenameout,height=6,width=14)
+grid.arrange( arrangeGrob(p1,p2,ncol=2) )
+dev.off()
+
+```
+
+
+
+```{r}
+p1 <- ggplot( ) + mytheme +
+  geom_point( data =projection_all %>%
+                filter( include == "in", genotype != "JU1941" ) %>% rowwise() %>%
+                mutate( sizeline = ifelse(line == "PL", 4, 2 ) ,
+                        alphaline = ifelse(line == "PL", 0.7, 1 ),
+                        shapetype = replace( genotype, line != "PL", line  ),
+                        abstime = replace( abstime , line == "RIL", abstime +0.2 ),
+                        abstime = replace( abstime , line == "IL", abstime - 0.2 )
+                        ) %>% ungroup(),
+          aes(
+              x = abstime,
+              y = hsprojection,
+            colour = as.factor(experimentype),
+            size = sizeline,
+            shape = as.factor(shapetype),
+            alpha = alphaline
+          ),  stroke = 2 ) +
+  scale_y_continuous( name = "Projection on heat-stress axis H\n[arbitrary units]"  ) +
+  scale_x_continuous( name = "Time [hours after\nage syncronization]"  ) +
+  theme(legend.position="bottom") +
+  guides( shape = guide_legend( title = "Genotype"), colour = FALSE, size = FALSE, alpha = FALSE) +
+     scale_colour_manual(values = c("#0000FF", "#FF0000" ,"#008000","#6B8E23") ) +
+    scale_shape_manual(values = c(0,1,3,4)  ) 
+show(p1)
+
+p2 <- ggplot( ) + mytheme +
+    geom_boxplot( data = projection_all %>%
+                filter( include == "in", genotype != "JU1941", line != "PL" ),
+          aes(
+              x =  as.character(abstime) ,
+              y = hsprojection,
+            colour = as.factor(experimentype),
+            group = paste( experimentype,  line )
+            ), size = 2 ) +
+  geom_point( data = projection_all %>%
+                filter( include == "in", genotype == "N2",
+                        (abstime == 46 | (abstime == 48 & experimentype == "HS") | (abstime == 50 & experimentype == "Rec") ) ) %>%
+                          group_by(abstime) %>% dplyr::summarise(meanhsproj = mean(hsprojection) ) ,
+              aes(
+                x = as.character(abstime),
+                y = meanhsproj
+              ), size = 5, shape = 1, stroke = 2, color = "#696969", alpha = 0.9  ) +
+  scale_y_continuous( name = "Projection on heat-stress axis H\n[arbitrary units]"  ) +
+  scale_x_discrete( name = "Time [hours after\nage syncronization]"  ) +
+  theme(legend.position="bottom"        ) +
+  guides( colour = guide_legend( title = "Experiment type")) +
+     scale_colour_manual(values = c("#0000FF", "#FF0000" ,"#008000","#6B8E23") ) +
+    scale_shape_manual(values = c(0,1,3,4)  ) +
+  facet_wrap( ~ line)
+show(p2)
+
+filenameout = "../../../Figures/SI/Rils_otheraxis.pdf"
+pdf(filenameout,height=6,width=14)
+grid.arrange( arrangeGrob(p1,p2,ncol=2) )
+dev.off()
+
+```
+
+
+
+```{r}
+###THIS PART IS REALLY BADLY WRITTEN!!!
+
+NSample <- 5000
+# take only the RILs/NILs that are present in all the experiments
+all_RILS <- (projection_all  %>% filter(line == "RIL") %>% select(genotype) %>% group_by(genotype) %>% dplyr::summarize(count = n()) %>% filter(count == 3)  )$genotype 
+all_NILS <- (projection_all  %>% filter(line == "IL") %>% select(genotype) %>% group_by(genotype) %>% dplyr::summarize(count = n()) %>% filter(count == 3)  )$genotype
+
+#variance of the data
+N2_sd_projection <- projection_all %>%
+          filter( include == "in", genotype == "N2",
+                  (abstime == 46 | (abstime == 48 & experimentype != "Dev") | (abstime == 50 & experimentype == "Rec") ) ) %>%
+                    group_by(abstime) %>% dplyr::summarise(sdhsproj = sd(hsprojection), count = n() ) 
+N2_sd_projection$experimentype <- c("Dev","HS","Rec")
+N2_sd_projection <- rbind(N2_sd_projection,N2_sd_projection)
+N2_sd_projection$line <- c(rep("RIL",3),rep("IL",3))
+
+N_dev <- as.numeric((N2_sd_projection %>% filter( experimentype == "Dev" ))$count)
+N_hs <- as.numeric((N2_sd_projection %>% filter( experimentype == "HS" ))$count)
+N_rec <- as.numeric((N2_sd_projection %>% filter( experimentype == "Rec" ))$count)
+
+randomize_sd <- data.frame()
+
+
+for( i in 1:NSample  ){
+
+  sample_RILs_dev <- sample( all_RILS, size = N_dev )
+  sd_RILs_dev <- as.numeric( projection_all  %>% filter(genotype %in% sample_RILs_dev, abstime == 46) %>% dplyr::summarize( sd = sd(hsprojection) )  )
+  randomize_sd <- rbind(randomize_sd,t(as.matrix(c("Dev","RIL",46,sd_RILs_dev))))
+  
+  
+  sample_RILs_hs <- sample( all_RILS, size = N_hs )
+  sd_RILs_hs <- as.numeric( projection_all  %>% filter(genotype %in% sample_RILs_dev, abstime == 48, experimentype != "Dev") %>% dplyr::summarize( sd = sd(hsprojection) )  )
+    randomize_sd <- rbind(randomize_sd,t(as.matrix(c("HS","RIL",48,sd_RILs_hs))))
+    
+  sample_RILs_rec <- sample( all_RILS, size = N_rec )
+  sd_RILs_rec <- as.numeric( projection_all  %>% filter(genotype %in% sample_RILs_dev, abstime == 50, experimentype == "Rec") %>% dplyr::summarize( sd = sd(hsprojection) )  )
+    randomize_sd <- rbind(randomize_sd,t(as.matrix(c("Rec","RIL",50,sd_RILs_rec))))
+        
+  sample_NILs_dev <- sample( all_NILS, size = N_dev )
+  sd_NILs_dev <- as.numeric( projection_all  %>% filter(genotype %in% sample_NILs_dev, abstime == 46) %>% dplyr::summarize( sd = sd(hsprojection) )  )
+  randomize_sd <- rbind(randomize_sd,t(as.matrix(c("Dev","IL",46,sd_NILs_dev))))
+  
+  
+  sample_NILs_hs <- sample( all_NILS, size = N_hs )
+  sd_NILs_hs <- as.numeric( projection_all  %>% filter(genotype %in% sample_NILs_dev, abstime == 48, experimentype != "Dev") %>% dplyr::summarize( sd = sd(hsprojection) )  ) 
+    randomize_sd <- rbind(randomize_sd,t(as.matrix(c("HS","IL",48,sd_NILs_hs))))
+  
+  sample_NILs_rec <- sample( all_NILS, size = N_rec )
+  sd_NILs_rec <- as.numeric( projection_all  %>% filter(genotype %in% sample_NILs_dev, abstime == 50, experimentype == "Rec") %>% dplyr::summarize( sd = sd(hsprojection) )  )
+    randomize_sd <- rbind(randomize_sd,t(as.matrix(c("Rec","IL",50,sd_NILs_rec))))
+  
+}
+colnames(randomize_sd) <- c("experimentype","line","abstime","sd")
+randomize_sd <- randomize_sd %>% mutate( sd = as.numeric(as.character(sd)))
+
+p <- ggplot(   ) + mytheme +
+  geom_freqpoly( data = randomize_sd,
+    aes(
+    x = sd,
+    y = ..density..,
+    color = as.factor(experimentype)
+  ), size = 2 ) + 
+  geom_vline( data = N2_sd_projection, aes(xintercept = sdhsproj), colour = "#696969", size = 2) +
+   scale_y_continuous( name = "Fraction of randomizations\nwith a given standard deviation"  ) +
+  scale_x_continuous( name = "Standard deviation of the projection on the heat shock axis"  ) +
+  theme(legend.position="bottom"        ) +
+  guides( colour = guide_legend( title = "Experiment type")) +
+ scale_colour_manual(values = c("#0000FF", "#FF0000" ,"#008000","#6B8E23") ) +
+  facet_grid( experimentype ~ line )
+show(p)
+
+filenameout = "../../../Figures/SI/Recombinant_vs_N2_variability.pdf"
+pdf(filenameout,height=6,width=7)
+print(p)
+dev.off()
+```
+
+
+
+
+```{r}
+p <- ggplot( ) + mytheme +
+    geom_vline(
+     data = projection_all %>% filter( line ==  "PL" , genotype != "JU1941", experimentype == "Dev" ) %>%
+       group_by(genotype) %>% dplyr::summarize( mean_proj = mean(dev_RILs_projection)  ),
+    aes(
+    xintercept = mean_proj,
+    colour = as.factor(genotype)
+  ), size = 2) +
+    geom_freqpoly( data = projection_all %>% filter( (line ==  "RIL" | line == "IL"), experimentype == "Dev" ),
+    aes(
+    x = dev_RILs_projection,
+    y = ..density..,
+    colour = as.factor(line),
+    group = as.factor(line)
+  ), size = 3) +
+  scale_y_continuous( name = "Fraction of genotypes with a\ngiven projection on the RIL axis"  ) +
+  scale_x_continuous( name = "Projection on the RIL axis" ) +
+  theme(legend.position = "bottom") +
+  scale_colour_manual(values = c("#FF8000", "#990099", "#4C9900", "#0066CC" ) ) +
+  guides(colour = guide_legend(override.aes = list(alpha = 1), title = "line")) 
+
+show(p)
+
+filenameout = "../../../Figures/SI/RILsproj_dev.pdf"
+pdf(filenameout,height=6,width=7)
+print(p)
+dev.off()
+```
+
+
+
+```{r}
+p <- ggplot( ) + mytheme +
+    geom_vline(
+     data = projection_all %>% filter( line ==  "PL" , genotype != "JU1941", experimentype == "HS" ) %>%
+       group_by(genotype) %>% dplyr::summarize( mean_proj = mean(hs_RILs_projection)  ),
+    aes(
+    xintercept = mean_proj,
+    colour = as.factor(genotype)
+  ), size = 2) +
+    geom_freqpoly( data = projection_all %>% filter( (line ==  "RIL" | line == "IL"), experimentype == "Dev" ),
+    aes(
+    x = hs_RILs_projection,
+    y = ..density..,
+    colour = as.factor(line),
+    group = as.factor(line)
+  ), size = 3, binwidth = 4) +
+  scale_y_continuous( name = "Fraction of genotypes with a given\nprojection on the heat-shock RIL axis"  ) +
+  scale_x_continuous( name = "Projection on the heat-shock RILs axis" ) +
+  theme(legend.position = "bottom") +
+  scale_colour_manual(values = c("#FF8000", "#990099", "#4C9900", "#0066CC" ) ) +
+  guides(colour = guide_legend(override.aes = list(alpha = 1), title = "line")) 
+
+show(p)
+
+filenameout = "../../../Figures/SI/RILsproj_hs.pdf"
+pdf(filenameout,height=6,width=7)
+print(p)
+dev.off()
+```
+
+###LIFESPAN
+
+```{r}
+filelifespan <- "../../../Data/LifeSpan/Lifespan_GRAPPLE.txt"
+lifespans_means <- read.csv( filelifespan, sep = "\t") %>%
+  rename(genotype = Genotype) 
+
+filelifespan_raw = "../../../Data/LifeSpan/Raw/Mark_files on RIL/LifespanRaw_Grapple.txt"
+lifespan.data <- read.csv(file=filelifespan_raw,sep = "\t") %>% filter(Use_data != "CRAP")
+```
+
+```{r}
+#absolute number of dead worms per day
+lifespan.data.2 <- cbind(lifespan.data[,c(1:9)],abs(data.matrix(lifespan.data[,-c(1:9)])-data.matrix(lifespan.data[,-c(1:8, ncol(lifespan.data))])))
+
+#now I get the maximum of dead worms (the number of original worms per plate)
+lifespans_distr <- mutate(lifespan.data,n=X51) %>%
+             gather(key="day",value="dead",-c(Genotype:Comment),-n) %>%
+             mutate(day=as.numeric(gsub("X","",day)),alive=n-dead,perc_alive=(n-dead)/n*100)
+#And I merge this list with the deaths per day
+lifespans_distr <- gather(lifespan.data.2,key="day",value="dead_per_day",-c(Genotype:Comment)) %>%
+             mutate(day=as.numeric(gsub("X","",day))) %>%
+             merge(lifespans_distr)
+
+lifespans_distr <-lifespans_distr %>% rename( genotype = Genotype, line = Type ) 
+```
+
+
+```{r}
+
+p1 <- ggplot(  ) + mytheme +
+      geom_line(
+    data = lifespans_distr %>% filter( Treatment == "ct", (line == "RIL" | line == "IL") ) %>% group_by(line,day, Treatment) %>%
+              dplyr::summarize( fracalive = mean(perc_alive)/100. ) %>%
+              ungroup() ,
+  aes(
+    x = day,
+    y = fracalive,
+    colour = as.factor(line),
+    group = as.factor(line)
+  ) , size = 3, alpha = 0.7) +
+  geom_line(
+    data = lifespans_distr %>% filter( Treatment == "ct", line == "PL", genotype != "WN036" ) %>% group_by(genotype, line,day, Treatment) %>%
+              dplyr::summarize( fracalive = mean(perc_alive)/100. ) %>%
+              ungroup() ,
+  aes(
+    x = day,
+    y = fracalive,
+    colour = as.factor(genotype),
+    group = as.factor(genotype)
+  ) , size = 3, alpha = 0.7) +
+  scale_colour_manual(values = c("#FF8000", "#990099", "#4C9900", "#0066CC") ) +
+    guides(colour = guide_legend( title = "genotype" ) ) +
+  theme( legend.position = c(0.8,0.85)  ) +
+    scale_x_continuous(
+    name = "day d [days]"
+  ) +   scale_y_continuous( name = "fraction of worms alive at day d" ) 
+show(p1)
+
+p2 <- ggplot(  ) + mytheme +
+      geom_line(
+    data = lifespans_distr %>% filter( Treatment == "ct", (line == "RIL" | line == "IL"), genotype != "WN036" ) %>% group_by(genotype, line,day, Treatment) %>%
+              dplyr::summarize( fracalive = mean(perc_alive)/100. ) %>%
+              ungroup() ,
+  aes(
+    x = day,
+    y = fracalive,
+    colour = as.factor(line),
+    group = as.factor(genotype)
+  ) , size = 0.75, alpha = 0.25) +
+      geom_line(
+    data = lifespans_distr %>% filter( Treatment == "ct", (line == "RIL" | line == "IL") ) %>% group_by(line,day, Treatment) %>%
+              dplyr::summarize( fracalive = mean(perc_alive)/100. ) %>%
+              ungroup() ,
+  aes(
+    x = day,
+    y = fracalive,
+    colour = as.factor(line),
+    group = as.factor(line)
+  ) , size = 3, alpha = 1) +
+  scale_colour_manual(values = c( "#4C9900", "#0066CC") ) +
+  theme( legend.position = "none" ) +
+      scale_x_continuous(
+    name = "day d [days]"
+  ) +   scale_y_continuous( name = "fraction of worms alive at day d"  ) +
+  facet_wrap( ~ line)
+show(p2)
+
+
+filenameout = "../../../Figures/SI/survival_curves_allct.pdf"
+pdf(filenameout,height=6,width=14)
+grid.arrange( arrangeGrob(p1,p2,ncol=2) )
+dev.off()
+```
+
+
+
+
+
+```{r}
+
+p1 <- ggplot(  ) + mytheme +
+      geom_line(
+    data = lifespans_distr %>% filter( Treatment == "hs", (line == "RIL" | line == "IL") ) %>% group_by(line,day, Treatment) %>%
+              dplyr::summarize( fracalive = mean(perc_alive)/100. ) %>%
+              ungroup() ,
+  aes(
+    x = day,
+    y = fracalive,
+    colour = as.factor(line),
+    group = as.factor(line)
+  ) , size = 3, alpha = 0.7) +
+  geom_line(
+    data = lifespans_distr %>% filter( Treatment == "hs", line == "PL", genotype != "WN036" ) %>% group_by(genotype, line,day, Treatment) %>%
+              dplyr::summarize( fracalive = mean(perc_alive)/100. ) %>%
+              ungroup() ,
+  aes(
+    x = day,
+    y = fracalive,
+    colour = as.factor(genotype),
+    group = as.factor(genotype)
+  ) , size = 3, alpha = 0.7) +
+  scale_colour_manual(values = c("#FF8000", "#990099", "#4C9900", "#0066CC") ) +
+    guides(colour = guide_legend( title = "genotype" ) ) +
+  theme( legend.position = c(0.8,0.85)  ) +
+    scale_x_continuous(
+    name = "day d"
+  ) +   scale_y_continuous( name = "fraction of worms alive at day d" ) 
+show(p1)
+
+p2 <- ggplot(  ) + mytheme +
+      geom_line(
+    data = lifespans_distr %>% filter( Treatment == "hs", (line == "RIL" | line == "IL"), genotype != "WN036" ) %>% group_by(genotype, line,day, Treatment) %>%
+              dplyr::summarize( fracalive = mean(perc_alive)/100. ) %>%
+              ungroup() ,
+  aes(
+    x = day,
+    y = fracalive,
+    colour = as.factor(line),
+    group = as.factor(genotype)
+  ) , size = 0.75, alpha = 0.25) +
+      geom_line(
+    data = lifespans_distr %>% filter( Treatment == "hs", (line == "RIL" | line == "IL") ) %>% group_by(line,day, Treatment) %>%
+              dplyr::summarize( fracalive = mean(perc_alive)/100. ) %>%
+              ungroup() ,
+  aes(
+    x = day,
+    y = fracalive,
+    colour = as.factor(line),
+    group = as.factor(line)
+  ) , size = 3, alpha = 1) +
+  scale_colour_manual(values = c( "#4C9900", "#0066CC") ) +
+  theme( legend.position = "none" ) +
+      scale_x_continuous(
+    name = "day d"
+  ) +   scale_y_continuous( name = "fraction of worms alive at day d" ) +
+  facet_wrap( ~ line)
+show(p2)
+
+
+filenameout = "../../../Figures/SI/survival_curves_allhs.pdf"
+pdf(filenameout,height=6,width=14)
+grid.arrange( arrangeGrob(p1,p2,ncol=2) )
+dev.off()
+```
+
+
+```{r}
+threshold_ls = 4
+p <- ggplot( lifespans_distr %>% filter(genotype == "N2" | genotype == "CB4856"  ) %>% group_by(genotype,day, Treatment) %>%
+              dplyr::summarize( deadfrac = mean(dead_per_day/n) ) %>%
+              ungroup()  ) + mytheme +
+  aes(
+    x = day,
+    y = deadfrac,
+    colour = as.factor(paste(Treatment,genotype)),
+    linetype = as.factor(Treatment)
+  ) + geom_line( size = 2.5, alpha = 0.7) +
+  theme(legend.position = "bottom") +
+  scale_colour_manual(values = c("#FF8000", "#990099", "#FFB266", "#FF66FF" ) ) +
+  scale_linetype_manual(values=c(hs = "solid", ct = "dashed") , labels = c(hs = "perturbed", ct = "control") ) +
+  guides(linetype = guide_legend(keywidth = 5, keyheight = 0.7, title = ""), colour = FALSE) +
+  scale_x_continuous(
+    limits = c(0,35),
+    name = "day d [days]"
+  ) +   scale_y_continuous( name = "fraction of worms died in day d" ) +
+  facet_wrap( ~ genotype)
+show(p)
+
+filenameout = "../../../Figures/SI/survival_curves_PL.pdf"
+pdf(filenameout,height=6,width=11)
+print(p)
+dev.off()
+
+```
+
+
+```{r}
+threshold_day = 5
+death_given_day <- lifespans_distr %>%
+  filter( day == threshold_day ) %>%
+  group_by(genotype, line, Treatment) %>%
+  dplyr::summarize( fracdead = 1.-mean(perc_alive)/100. ) %>%
+  ungroup() 
+
+lifespans_death_means <- left_join(death_given_day,lifespans_means)
+
+p <- ggplot() + mytheme+ 
+    geom_point( data = lifespans_death_means %>% filter( Treatment == "hs", (line == "IL" | line == "RIL" ) ),
+  aes(
+    x = life.mean,
+    y = fracdead,
+    colour = as.factor(line)
+  ) , size = 6 , alpha = 0.7 ) +
+    geom_point( data = lifespans_death_means %>% filter( Treatment == "hs", line == "PL", genotype != "WN036" ),
+  aes(
+    x = life.mean,
+    y = fracdead,
+    colour = as.factor(genotype)
+  ) , size = 8, alpha = 0.7 ) +
+  scale_colour_manual(values = c("#FF8000", "#990099", "#4C9900", "#0066CC") ) +
+  scale_x_continuous( name = "Average lifetime after heat-shock" ) +
+  scale_y_continuous( name = "Fraction of worms died after 5 days" ) +
+  theme(legend.position = "bottom") +
+  guides(colour = guide_legend(override.aes = list(alpha = 1), title = "line")) 
+show(p)
+
+filenameout = "../../../Figures/SI/mean_vs_5thday.pdf"
+pdf(filenameout,height=6,width=7)
+print(p)
+dev.off()
+
+```
+
+
+```{r}
+
+
+p <- ggplot() + mytheme+ geom_abline(slope = 1, size = 2, colour = "#606060") +
+    geom_point( data = lifespans_death_means %>% select(genotype, line, Treatment, life.mean) %>% spread(Treatment, life.mean) %>%
+                  filter( (line == "IL" | line == "RIL" ) ),
+  aes(
+    x = ct,
+    y = hs,
+    colour = as.factor(line)
+  ) , size = 6 , alpha = 0.7 ) +
+    geom_point( data = lifespans_death_means %>% select(genotype, line, Treatment, life.mean) %>% spread(Treatment, life.mean) %>%
+                  filter( line == "PL", genotype != "WN036" ),
+  aes(
+    x = ct,
+    y = hs,
+    colour = as.factor(genotype)
+  ) , size = 8, alpha = 0.7 ) +
+  scale_colour_manual(values = c("#FF8000", "#990099", "#4C9900", "#0066CC") ) +
+  scale_y_continuous( name = "Average lifetime after heat-shock" ) +
+  scale_x_continuous( name = "Average lifetime without heat-shock" ) +
+  theme(legend.position = "bottom") +
+  guides(colour = guide_legend(override.aes = list(alpha = 1), title = "line")) 
+show(p)
+
+filenameout = "../../../Figures/SI/mean_ct_vs_hs.pdf"
+pdf(filenameout,height=6,width=7)
+print(p)
+dev.off()
+```
+
+```{r}
+threshold <- threshold_day
+lifespan_mean_threshold <- lifespans_distr %>%
+  select(genotype, line, Treatment, day, dead_per_day) %>%
+  filter( day > threshold ) %>%
+  group_by( genotype, line, Treatment ) %>%
+  summarize( life.mean = sum(day * dead_per_day) /  sum( dead_per_day) ) %>%
+  ungroup()
+
+p <- ggplot() + mytheme+ geom_abline(slope = 1, size = 2, colour = "#606060") +
+    geom_point( data = lifespan_mean_threshold %>% select(genotype, line, Treatment, life.mean) %>% spread(Treatment, life.mean) %>%
+                  filter( (line == "IL" | line == "RIL" ) ),
+  aes(
+    x = ct,
+    y = hs,
+    colour = as.factor(line)
+  ) , size = 6 , alpha = 0.7 ) +
+    geom_point( data = lifespan_mean_threshold  %>% select(genotype, line, Treatment, life.mean) %>% spread(Treatment, life.mean) %>%
+                  filter( line == "PL", genotype != "WN036" ),
+  aes(
+    x = ct,
+    y = hs,
+    colour = as.factor(genotype)
+  ) , size = 8, alpha = 0.7 ) +
+  scale_colour_manual(values = c("#FF8000", "#990099", "#4C9900", "#0066CC") ) +
+  scale_y_continuous( name = "Average lifetime at 5 days after heat-stress" ) +
+  scale_x_continuous( name = "Average lifetime at 5 days without heat-stress" ) +
+  theme(legend.position = "bottom") +
+  guides(colour = guide_legend(override.aes = list(alpha = 1), title = "line")) 
+show(p)
+
+filenameout = "../../../Figures/SI/lifetime_trunc.pdf"
+pdf(filenameout,height=6,width=7)
+print(p)
+dev.off()
+```
+
+
+
+### Life span vs projection
+
+```{r}
+allprojection_lifespan <- inner_join(lifespans_means %>% mutate( genotype = toupper(genotype) ) %>%
+                                       select( genotype, Treatment, life.mean  ) %>%
+                                       spread( Treatment, life.mean  ),
+                                     projection_all %>% mutate( genotype = toupper(genotype) ) )
+```
+
+```{r}
+allprojection_reduced <- allprojection_lifespan %>%
+  filter( (experimentype == "Dev" & abstime == 46) | (experimentype == "HS" & abstime == 48) |
+            (experimentype == "Rec" & abstime == 50) , include == "in"  ) %>%
+  select( -codeexp, -dye, -batch, agebeginshock, -shockduration, -abstime, -include, -agebeginshock, -rec_RILs_projection ) %>%
+  group_by(genotype,ct, hs, line, experimentype) %>%
+  summarize_each(funs(mean)) %>%
+  ungroup()
+
+correlation_proj_lifespan <- allprojection_reduced %>%
+  filter( !is.na(hs), line != "PL" ) %>%
+  group_by(line,experimentype) %>%
+  dplyr::summarize( pval_dev = cor.test(dev_RILs_projection,hs/ct)$p.value,
+                    pval_hs = cor.test(hs_RILs_projection,hs/ct)$p.value,
+                    pval_dev_or = cor.test(devprojection,hs/ct)$p.value,
+                    pval_hs_or = cor.test(hsprojection,hs/ct)$p.valu
+                    ) %>% ungroup()
+
+```
+
+```{r}
+
+p_dev <- ggplot() + mytheme+
+    geom_smooth(data = allprojection_reduced %>%
+                  filter(  line == "RIL" ),
+                   aes(
+                      x = dev_RILs_projection,
+                      y = hs/ct
+                  ),
+               method = "lm", colour = "#606060", se = FALSE, size = 3, alpha = 0.7
+               ) +
+    geom_text( data = correlation_proj_lifespan %>% filter(  line == "RIL" ),
+          label = "X",
+          x = 115,
+          y = 1.05,
+          colour = "red",
+          fontface = 2,
+          aes( size =  as.numeric( pval_dev < 0.05 )    )
+    ) + scale_size_area( range(0,6) ) +
+    geom_point( data = allprojection_reduced %>%
+                  filter(  line == "RIL" ),
+  aes(
+    x = dev_RILs_projection,
+    y = hs/ct,
+    colour = as.factor(line)
+  ) , size = 6 , alpha = 0.7 ) +
+    geom_point( data = allprojection_reduced %>%
+                  filter( line == "PL", genotype != "WN036" ),
+  aes(
+    x = dev_RILs_projection,
+    y = hs/ct,
+    colour = as.factor(genotype)
+  ) , size = 8, alpha = 0.7 ) +
+  scale_colour_manual(values = c("#FF8000", "#990099",  "#0066CC") ) +
+  scale_y_continuous( name = "Ratio between average lifetime\nafterheat-shock and without" ) +
+  scale_x_continuous( name = "Projection on RIL developmental axis G" ) +
+  theme(legend.position = "none") +
+  guides(colour = guide_legend(override.aes = list(alpha = 1), title = "line"), size = FALSE) +
+  facet_wrap( ~ experimentype )
+show(p_dev)
+
+
+p_hs <- ggplot() + mytheme+
+    geom_smooth(data = allprojection_reduced %>%
+                  filter(  line == "RIL" ),
+                   aes(
+                      x = hs_RILs_projection,
+                      y = hs/ct
+                  ),
+               method = "lm", colour = "#606060", se = FALSE, size = 3, alpha = 0.7
+               ) +
+    geom_text( data = correlation_proj_lifespan %>% filter(  line == "RIL" ),
+          label = "X",
+          x = 37,
+          y = 1.05,
+          colour = "red",
+          fontface = 2,
+          aes( size =  as.numeric( pval_hs < 0.05 )    )
+    ) + scale_size_area( range(0,6) ) +
+    geom_point( data = allprojection_reduced %>%
+                  filter(  line == "RIL" ),
+  aes(
+    x = hs_RILs_projection,
+    y = hs/ct,
+    colour = as.factor(line)
+  ) , size = 6 , alpha = 0.7 ) +
+    geom_point( data = allprojection_reduced %>%
+                  filter( line == "PL", genotype != "WN036" ),
+  aes(
+    x = hs_RILs_projection,
+    y = hs/ct,
+    colour = as.factor(genotype)
+  ) , size = 8, alpha = 0.7 ) +
+  scale_colour_manual(values = c("#FF8000", "#990099",  "#0066CC") ) +
+  scale_y_continuous( name = "Ratio between average lifetime \n after  heat-stress and without" ) +
+  scale_x_continuous( name = "Projection on RIL heat-stress axis GH" ) +
+  theme(legend.position = "bottom") +
+  guides(colour = guide_legend(override.aes = list(alpha = 1), title = "line"), size = FALSE) +
+  facet_wrap( ~ experimentype )
+show(p_hs)
+
+filenameout = "../../../Figures/SI/correlation_RILs.pdf"
+pdf(filenameout,height=8,width=11)
+grid.arrange( arrangeGrob(p_dev,p_hs,ncol=1, heights = c(1, 1.17) ) )
+dev.off()
+
+```
+
+
+```{r}
+
+p_dev <- ggplot() + mytheme+
+    geom_smooth(data = allprojection_reduced %>%
+                  filter(  line == "RIL" ),
+                   aes(
+                      x = devprojection,
+                      y = hs/ct
+                  ),
+               method = "lm", colour = "#606060", se = FALSE, size = 3, alpha = 0.7
+               ) +
+    geom_text( data = correlation_proj_lifespan %>% filter(  line == "RIL" ),
+          label = "X",
+          x = 115,
+          y = 1.05,
+          colour = "red",
+          fontface = 2,
+          aes( size =  as.numeric( pval_dev_or < 0.05 )    )
+    ) + scale_size_area( range(0,6) ) +
+    geom_point( data = allprojection_reduced %>%
+                  filter(  line == "RIL" ),
+  aes(
+    x = devprojection,
+    y = hs/ct,
+    colour = as.factor(line)
+  ) , size = 6 , alpha = 0.7 ) +
+    geom_point( data = allprojection_reduced %>%
+                  filter( line == "PL", genotype != "WN036" ),
+  aes(
+    x = devprojection,
+    y = hs/ct,
+    colour = as.factor(genotype)
+  ) , size = 8, alpha = 0.7 ) +
+  scale_colour_manual(values = c("#FF8000", "#990099",  "#0066CC") ) +
+  scale_y_continuous( name = "Ratio between average lifetime\nafterheat-stress and without" ) +
+  scale_x_continuous( name = "Projection on developmental axis D" ) +
+  theme(legend.position = "none") +
+  guides(colour = guide_legend(override.aes = list(alpha = 1), title = "line"), size = FALSE) +
+  facet_wrap( ~ experimentype )
+show(p_dev)
+
+
+p_hs <- ggplot() + mytheme+
+    geom_smooth(data = allprojection_reduced %>%
+                  filter(  line == "RIL" ),
+                   aes(
+                      x = hsprojection,
+                      y = hs/ct
+                  ),
+               method = "lm", colour = "#606060", se = FALSE, size = 3, alpha = 0.7
+               ) +
+    geom_text( data = correlation_proj_lifespan %>% filter(  line == "RIL" ),
+          label = "X",
+          x = 37,
+          y = 1.05,
+          colour = "red",
+          fontface = 2,
+          aes( size =  as.numeric( pval_hs_or < 0.05 )    )
+    ) + scale_size_area( range(0,6) ) +
+    geom_point( data = allprojection_reduced %>%
+                  filter(  line == "RIL" ),
+  aes(
+    x = hsprojection,
+    y = hs/ct,
+    colour = as.factor(line)
+  ) , size = 6 , alpha = 0.7 ) +
+    geom_point( data = allprojection_reduced %>%
+                  filter( line == "PL", genotype != "WN036" ),
+  aes(
+    x = hsprojection,
+    y = hs/ct,
+    colour = as.factor(genotype)
+  ) , size = 8, alpha = 0.7 ) +
+  scale_colour_manual(values = c("#FF8000", "#990099",  "#0066CC") ) +
+  scale_y_continuous( name = "Ratio between average lifetime \n after  heat-stress and without" ) +
+  scale_x_continuous( name = "Projection on heat-stress axis" ) +
+  theme(legend.position = "bottom") +
+  guides(colour = guide_legend(override.aes = list(alpha = 1), title = "line"), size = FALSE) +
+  facet_wrap( ~ experimentype )
+show(p_hs)
+
+filenameout = "../../../Figures/SI/correlation_RILs_or.pdf"
+pdf(filenameout,height=8,width=11)
+grid.arrange( arrangeGrob(p_dev,p_hs,ncol=1, heights = c(1, 1.17) ) )
+dev.off()
+
+```
+
+
+
+
+```{r}
+
+p_dev <- ggplot() + mytheme+
+    geom_smooth(data = allprojection_reduced %>%
+                  filter(  line == "IL" ),
+                   aes(
+                      x = dev_RILs_projection,
+                      y = hs/ct
+                  ),
+               method = "lm", colour = "#606060", se = FALSE, size = 3, alpha = 0.7
+               ) +
+    geom_text( data = correlation_proj_lifespan %>% filter(  line == "RIL" ),
+          label = "X",
+          x = 15,
+          y = 1.0,
+          colour = "red",
+          fontface = 2,
+          aes( size =  as.numeric( pval_dev < 0.05 )    )
+    ) + scale_size_area( range(0,6) ) +
+    geom_point( data = allprojection_reduced %>%
+                  filter(  line == "IL" ),
+  aes(
+    x = dev_RILs_projection,
+    y = hs/ct,
+    colour = as.factor(line)
+  ) , size = 6 , alpha = 0.7 ) +
+    geom_point( data = allprojection_reduced %>%
+                  filter( line == "PL", genotype != "WN036" ),
+  aes(
+    x = dev_RILs_projection,
+    y = hs/ct,
+    colour = as.factor(genotype)
+  ) , size = 8, alpha = 0.7 ) +
+  scale_colour_manual(values = c("#FF8000", "#990099","#4C9900") ) +
+  scale_y_continuous( name = "Ratio between average lifetime\nafterheat-shock and without" ) +
+  scale_x_continuous( name = "Projection on RIL developmental axis G" ) +
+  theme(legend.position = "none") +
+  guides(colour = guide_legend(override.aes = list(alpha = 1), title = "line"), size = FALSE) +
+  facet_wrap( ~ experimentype )
+show(p_dev)
+
+
+p_hs <- ggplot() + mytheme+
+    geom_smooth(data = allprojection_reduced %>%
+                  filter(  line == "IL" ),
+                   aes(
+                      x = hs_RILs_projection,
+                      y = hs/ct
+                  ),
+               method = "lm", colour = "#606060", se = FALSE, size = 3, alpha = 0.7
+               ) +
+    geom_text( data = correlation_proj_lifespan %>% filter(  line == "IL" ),
+          label = "X",
+          x = 6,
+          y = 1.0,
+          colour = "red",
+          fontface = 2,
+          aes( size =  as.numeric( pval_hs < 0.05 )    )
+    ) + scale_size_area( range(0,6) ) +
+    geom_point( data = allprojection_reduced %>%
+                  filter(  line == "IL" ),
+  aes(
+    x = hs_RILs_projection,
+    y = hs/ct,
+    colour = as.factor(line)
+  ) , size = 6 , alpha = 0.7 ) +
+    geom_point( data = allprojection_reduced %>%
+                  filter( line == "PL", genotype != "WN036" ),
+  aes(
+    x = hs_RILs_projection,
+    y = hs/ct,
+    colour = as.factor(genotype)
+  ) , size = 8, alpha = 0.7 ) +
+  scale_colour_manual(values = c("#FF8000", "#990099",  "#4C9900") ) +
+  scale_y_continuous( name = "Ratio between average lifetime \n after  heat-stress and without" ) +
+  scale_x_continuous( name = "Projection on RIL heat-stress axis GH" ) +
+  theme(legend.position = "bottom") +
+  guides(colour = guide_legend(override.aes = list(alpha = 1), title = "line"), size = FALSE) +
+  facet_wrap( ~ experimentype )
+show(p_hs)
+
+filenameout = "../../../Figures/SI/correlation_NILs.pdf"
+pdf(filenameout,height=8,width=11)
+grid.arrange( arrangeGrob(p_dev,p_hs,ncol=1, heights = c(1, 1.17) ) )
+dev.off()
+
+```
+
+
+```{r}
+p_dev <- ggplot() + mytheme+
+    geom_smooth(data = allprojection_reduced %>%
+                  filter(  line == "IL" ),
+                   aes(
+                      x = devprojection,
+                      y = hs/ct
+                  ),
+               method = "lm", colour = "#606060", se = FALSE, size = 3, alpha = 0.7
+               ) +
+    geom_text( data = correlation_proj_lifespan %>% filter(  line == "IL" ),
+          label = "X",
+          x = 15,
+          y = 1.0,
+          colour = "red",
+          fontface = 2,
+          aes( size =  as.numeric( pval_dev_or < 0.05 )    )
+    ) + scale_size_area( range(0,6) ) +
+    geom_point( data = allprojection_reduced %>%
+                  filter(  line == "IL" ),
+  aes(
+    x = devprojection,
+    y = hs/ct,
+    colour = as.factor(line)
+  ) , size = 6 , alpha = 0.7 ) +
+    geom_point( data = allprojection_reduced %>%
+                  filter( line == "PL", genotype != "WN036" ),
+  aes(
+    x = devprojection,
+    y = hs/ct,
+    colour = as.factor(genotype)
+  ) , size = 8, alpha = 0.7 ) +
+  scale_colour_manual(values = c("#FF8000", "#990099","#4C9900") ) +
+  scale_y_continuous( name = "Ratio between average lifetime\nafterheat-stress and without" ) +
+  scale_x_continuous( name = "Projection on developmental axis D" ) +
+  theme(legend.position = "none") +
+  guides(colour = guide_legend(override.aes = list(alpha = 1), title = "line"), size = FALSE) +
+  facet_wrap( ~ experimentype )
+show(p_dev)
+
+
+p_hs <- ggplot() + mytheme+
+    geom_smooth(data = allprojection_reduced %>%
+                  filter(  line == "IL" ),
+                   aes(
+                      x = hsprojection,
+                      y = hs/ct
+                  ),
+               method = "lm", colour = "#606060", se = FALSE, size = 3, alpha = 0.7
+               ) +
+    geom_text( data = correlation_proj_lifespan %>% filter(  line == "IL" ),
+          label = "X",
+          x = 6,
+          y = 1.0,
+          colour = "red",
+          fontface = 2,
+          aes( size =  as.numeric( pval_hs_or < 0.05 )    )
+    ) + scale_size_area( range(0,6) ) +
+    geom_point( data = allprojection_reduced %>%
+                  filter(  line == "IL" ),
+  aes(
+    x = hsprojection,
+    y = hs/ct,
+    colour = as.factor(line)
+  ) , size = 6 , alpha = 0.7 ) +
+    geom_point( data = allprojection_reduced %>%
+                  filter( line == "PL", genotype != "WN036" ),
+  aes(
+    x = hsprojection,
+    y = hs/ct,
+    colour = as.factor(genotype)
+  ) , size = 8, alpha = 0.7 ) +
+  scale_colour_manual(values = c("#FF8000", "#990099",  "#4C9900") ) +
+  scale_y_continuous( name = "Ratio between average lifetime \n after  heat-stress and without" ) +
+  scale_x_continuous( name = "Projection on heat-stress axis" ) +
+  theme(legend.position = "bottom") +
+  guides(colour = guide_legend(override.aes = list(alpha = 1), title = "line"), size = FALSE) +
+  facet_wrap( ~ experimentype )
+show(p_hs)
+
+filenameout = "../../../Figures/SI/correlation_NILs_or.pdf"
+pdf(filenameout,height=8,width=11)
+grid.arrange( arrangeGrob(p_dev,p_hs,ncol=1, heights = c(1, 1.17) ) )
+dev.off()
+```
+
+
+```{r}
+adev <- projection_all %>% filter(line == "RIL", experimentype == "Dev" ) %>%
+  select( genotype, devprojection )
+ahs <- projection_all %>% filter(line == "RIL", experimentype == "Dev" ) %>%
+  select( genotype, hsprojection )
+a <- inner_join(adev, ahs)
+cor.test(a$devprojection,a$hsprojection)
+
+b <- projection_all %>% filter( line == "PL", experimentype == "Rec" )
+cor.test(b$devprojection,b$hsprojection)
+
+p <- ggplot( b) + mytheme +
+  aes(
+    x = devprojection,
+    y = hsprojection
+  ) + geom_point(size = 2)
+show(p)
+```
+
+
+```{r}
+
+fertility <- read.csv("../../../Data/fertility_RILS.csv") %>% rename(measure = X) %>% 
+  gather(genotype,value, -measure) %>% 
+  #spread(measure,value) %>%
+  mutate(genotype = paste("wn",sprintf("%03d",as.integer(gsub("WN","",genotype))),sep = "")  )
+
+fertility <- projection_all %>%
+  gather(nameproj,valproj, devprojection,hsprojection,dev_RILs_projection,hs_RILs_projection,rec_RILs_projection) %>% 
+  left_join(fertility) %>% filter(!is.na(measure),!is.na(value)) 
+
+
+fertility %>%  group_by( experimentype, nameproj, measure  ) %>%
+  summarise( cor = cor.test(valproj,value)$estimate , pval = cor.test(valproj,value)$p.value ) %>%
+  ungroup() %>% arrange(pval)
+
+
+p <- ggplot(fertility  %>%  filter(experimentype == "HS") 
+               %>% group_by(measure)  %>% mutate(value = (value - mean(value))/sd(value) )  %>%
+              ungroup() %>% group_by(nameproj)  %>% mutate(valproj = (valproj - mean(valproj))/sd(valproj) )  %>%
+              ungroup()
+) + mytheme +
+  aes(
+    x = valproj,
+    y = value
+  ) + geom_point(  ) + 
+  stat_smooth( method = "lm", se = FALSE ) +
+  facet_grid( nameproj ~ measure, scales = "free" )
+p
+
+
+p <- ggplot(fertility  %>% filter(experimentype == "Dev") %>% 
+              filter(!is.na(measure),!is.na(value))  %>% group_by(measure)  %>% mutate(value = (value - mean(value))/sd(value) )  %>%
+              ungroup() %>% group_by(nameproj)  %>% mutate(valproj = (valproj - mean(valproj))/sd(valproj) )  %>%
+              ungroup()
+) + mytheme +
+  aes(
+    x = valproj,
+    y = value
+  ) + geom_point(  ) + 
+    stat_smooth( method = "lm", se = FALSE ) +
+  facet_grid( nameproj ~ measure, scales = "free" )
+p
+
+
+p <- ggplot(fertility  %>%  filter(experimentype == "Rec") %>% 
+              filter(!is.na(measure),!is.na(value))  %>% group_by(measure)  %>% mutate(value = (value - mean(value))/sd(value) )  %>%
+              ungroup() %>% group_by(nameproj)  %>% mutate(valproj = (valproj - mean(valproj))/sd(valproj) )  %>%
+              ungroup()
+) + mytheme +
+  aes(
+    x = valproj,
+    y = value
+  ) + geom_point(  ) + 
+    stat_smooth( method = "lm", se = FALSE ) +
+  facet_grid( nameproj ~ measure, scales = "free" )
+p
+
+
+```
+

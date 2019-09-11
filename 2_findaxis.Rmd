@@ -1,0 +1,770 @@
+---
+output: pdf_document
+---
+
+```{r global_options, include=FALSE}
+rm(list=ls()) ### To clear namespace
+library(knitr)
+opts_chunk$set(eval=TRUE, include = TRUE, echo = TRUE,
+               warning=FALSE, message=FALSE,
+               fig.width=8, fig.height=6)
+```
+
+
+# Development, stress response and recovery.
+
+```{r}
+require(dplyr)
+require(tidyr)
+require(ggplot2)
+require(stats)
+
+
+
+mytheme <- theme_bw() + theme(
+  legend.title  = element_text( size=6),
+  #  legend.position = "bottom",
+  #	legend.direction = "horizontal",
+  legend.key = element_blank(),
+  legend.text  = element_text( size=6),
+  panel.background = element_blank(),
+  panel.grid = element_blank(),
+  text = element_text( family="Helvetica", size=9),
+  panel.border = element_rect( colour = "black", size=1),
+  axis.ticks = element_line(size = 1.)
+)
+
+rotate <- function(x) t(apply(x, 2, rev))
+plotmatrix <- function(C){
+  
+  x <- (1:nrow(C)) 
+  y <- (1:ncol(C)) 
+  image(y, x, rotate(C), col = heat.colors(20), 
+  axes=FALSE,xlab="",ylab="",srt=45) 
+  axis(3, at = 1:ncol(C), labels=colnames(C),srt=45,tick=FALSE) 
+  axis(2, at = 1:nrow(C), labels=rev(rownames(C)),srt=45,tick=FALSE)   
+  
+}
+
+pca_timedata <- function( dfdata, control_type , first_column, last_column){
+  
+  dfdata <- dfdata %>% filter( ControlType == control_type ) 
+  rownames(dfdata) <- dfdata$rownumber
+  
+  dataforpca <- na.omit( # remove NAs
+    dfdata
+  )[,first_column:last_column]
+
+  # rescale the expression of all genes
+  #dataforpca <- t( scale(t(dataforpca) , center = TRUE, scale = FALSE  ) )
+  
+  pca <-prcomp(dataforpca,
+           center = TRUE,
+           scale = TRUE)
+
+  pcaresults <- as.data.frame(pca$rotation)
+  pcaresults$exprimnt <- rownames(pcaresults)
+  pcaresults <- pcaresults %>%
+    separate( exprimnt, c("codeexp","line","genotype", "batch" , "dye","experimentype", "abstime"),  sep = ":")
+
+  vectors <- pca$x
+  sdev <- pca$sdev
+  
+  B <- as.matrix(dataforpca)
+  Bsc <- scale(B)
+  Btsc <- scale(t(B))
+  
+  ordertimes <- order( do.call(cbind,strsplit(colnames(B),":"))[5,] )
+  colnames(B) <- do.call(cbind,strsplit(colnames(B),":"))[5,]
+    
+    output <- list( 
+    "sdev" = sdev,
+    "data" = B[,ordertimes],
+    "corrmatrixtimes" = (t(Bsc) %*% Bsc  / (dim(B)[1]-1))[ordertimes,ordertimes] ,
+    #"corrmatrixgenes" = t(Btsc) %*% Btsc  / dim(B)[2] ,
+    "projections" = pcaresults,
+    "vectors" = vectors
+    )
+  
+  return( output )
+  
+}
+
+normalized_scalarprod <- function(v1, v2){
+  return( v1 %*% v2 )
+  
+}
+
+
+
+```
+
+
+
+```{r}
+### IMPORT AND NORMALIZE WITHIN ARRAYS ###
+
+dirin = "../../../Data/MicroArrays/"
+
+filedata <- paste(dirin,"allexperiments.Rdata",sep="")
+
+load(paste(dirin,"allexperiments.Rdata",sep=""))
+
+
+
+```
+
+
+
+
+
+
+##Development
+
+```{r}
+### data development ###
+data_development <- alldata_expr %>%
+  filter( include == "in", experimentype == "Dev", genotype == "N2" ) %>%
+  select(-GeneName)
+
+devspread <- data_development %>%
+  unite( idexp , codeexp, line, genotype, batch, dye, experimentype, abstime, sep = ":"  ) %>%
+  mutate( logintensity = log(intensity) ) %>%
+  dplyr::select(-include, -intensity,
+         -agebeginshock, -shockduration) %>%
+  spread( idexp, logintensity ) 
+```
+
+
+The distribution of the logarithm of gene expression levels is bimodial (with a minimum around 4.5 in both batches).
+The distribution is quite stable for genes with high expression level (above 4.5) between batches, times and dyes. Low
+expressed genes are more variable.
+```{r}
+threshold_expression = 4.5
+
+p <- ggplot( data_development %>% filter( ControlType == 0 ) ) + mytheme +
+  geom_vline(xintercept = threshold_expression, colour = "gray", size = 2) +
+  aes(
+    x = log(intensity),
+    y = ..density..,
+    group = as.factor(abstime),
+    colour = as.factor( dye )
+  ) +
+  geom_freqpoly( size  = 1 ) +
+  scale_y_continuous( name = "Density"  ) +
+  scale_x_continuous( name = "log expression intensity"  ) +
+  facet_wrap(~batch)
+show(p)
+
+
+```
+
+I consider only set 13
+
+```{r}
+devspread_set13 <- data_development %>%
+  filter( batch == "set13" ) %>%
+  unite( idexp , codeexp,line, genotype, batch, dye, experimentype, abstime, sep = ":"  ) %>%
+  mutate( logintensity = log(intensity) ) %>%
+  dplyr::select(-include, -intensity,
+         -agebeginshock, -shockduration) %>%
+  spread( idexp, logintensity ) 
+
+first_pos = 4
+last_pos = dim(devspread_set13)[2]
+
+average_expressions_set13 <- devspread_set13 %>%
+  gather(exprmnt, expression, first_pos:last_pos) %>%
+  group_by(rownumber,  ControlType, ProbeName ) %>%
+  summarize( aveexprs = mean(expression) ) %>%
+  ungroup()
+
+large_espression_genes_set13 <- average_expressions_set13 %>%
+  filter(aveexprs > threshold_expression)
+
+largegenes_set13 <- large_espression_genes_set13$rownumber
+
+devspread_set13 <- devspread_set13 %>%
+  filter( rownumber %in% largegenes_set13 )
+```
+
+
+
+```{r}
+first_pos = 4
+last_pos = dim(devspread_set13)[2]
+
+empirical.reduced <- pca_timedata( devspread_set13, 0 , 4, 11 ) 
+```
+
+The second component is well correlated with time
+ 
+```{r} 
+p <- ggplot(  empirical.reduced$projections ) + mytheme +
+  aes(
+    x = as.numeric(abstime),
+    y = PC2,
+    colour = dye,
+    shape = batch
+  ) +
+  geom_point( size = 4 )
+show(p)
+```
+
+We can then isolate the first component and project the gene expressio of all the points
+on this axis
+
+```{r}
+#get the PC vector
+vector_reduced <- empirical.reduced$vectors[,2]
+normalization <- sqrt(  t(vector_reduced) %*% vector_reduced )
+
+#define it as a dataframe
+axis_dev <- as.data.frame( vector_reduced ) 
+axis_dev$rownumber <- as.integer( rownames( empirical.reduced$vectors) )
+
+axis_dev <- axis_dev %>%
+  mutate( component = vector_reduced / normalization ) %>%
+  select( -vector_reduced )
+
+# normalize it
+vector_reduced <- vector_reduced / normalization
+
+devspreadall <- data_development %>%
+  unite( idexp , codeexp, line, genotype, batch, dye, experimentype, abstime, sep = ":"  ) %>%
+  mutate( logintensity = log(intensity) ) %>%
+  filter( rownumber %in% largegenes_set13 ) %>%
+  dplyr::select(-include, -intensity,
+         -agebeginshock, -shockduration) %>%
+  spread( idexp, logintensity ) 
+
+first_pos = 4
+last_pos = dim(devspreadall)[2]
+projection_dev <- devspreadall %>% left_join( axis_dev , fill = 0 ) %>%
+  mutate( component = replace( component , is.na(component), 0  ) ) %>%
+  mutate_each(funs(replace(., which(is.na(.)), 0)),first_pos:last_pos ) %>% 
+  mutate_each(funs( .*component ), first_pos:last_pos  )  %>%
+  select(-component) %>%
+  gather( idexp, value, first_pos:last_pos ) %>%
+  group_by( idexp ) %>%
+  summarise( value = sum(value) ) %>%
+  separate( idexp, c("codeexp","line","genotype", "batch" , "dye","experimentype", "abstime"),  sep = ":")
+
+p <- ggplot(  projection_dev ) + mytheme +
+  aes(
+    x = as.numeric(abstime),
+    y = value
+  ) +
+  stat_smooth(method = "lm", formula =  y ~ poly(x, 2),
+              size = 1, se = FALSE,
+              colour = "gray" ) +
+  geom_point( aes(
+    colour =as.factor(dye),
+    shape = as.factor(batch) 
+    ), size = 3 ) +
+   scale_y_continuous( name = "Projection of dev axis [arbitrary units]"  ) +
+    scale_x_continuous( name = "time [hours]"  ) +
+   guides(shape = guide_legend( title = "batch"), colour = guide_legend( title = "dye")) 
+show(p)
+ 
+```
+
+
+## Heat shock
+
+
+```{r}
+data_heatshock <- alldata_expr %>%
+  filter( include == "in", experimentype == "HS",  genotype == "N2" ) %>%
+  select(-GeneName)
+
+hsspread <- data_heatshock  %>%
+  unite( idexp , codeexp, line, genotype, batch, dye, experimentype, abstime, sep = ":"  ) %>%
+  mutate( logintensity = log(intensity) ) %>%
+  dplyr::select(-include, -intensity,
+         -agebeginshock, -shockduration) %>%
+  spread( idexp, logintensity )  
+```
+
+
+```{r}
+p <- ggplot( data_heatshock %>% filter( ControlType == 0 ) ) + mytheme +
+  aes(
+    x = log(intensity),
+    y = ..density..,
+    group = as.factor(paste(abstime,batch,codeexp,genotype,experimentype,dye)),
+    colour = as.factor( dye )
+  ) +
+  geom_freqpoly() +
+  facet_wrap(~batch, ncol = 3)
+show(p)
+```
+
+Consider only set1
+
+```{r}
+hsspread_set1 <- data_heatshock %>%
+  filter( batch == "set1" ) %>%
+  unite( idexp , codeexp, line, genotype, batch, dye, experimentype, abstime, sep = ":"  ) %>%
+  mutate( logintensity = log(intensity) ) %>%
+  dplyr::select(-include, -intensity,
+         -agebeginshock, -shockduration) %>%
+  spread( idexp, logintensity ) 
+
+first_pos = 4
+last_pos = dim(hsspread_set1)[2]
+
+average_expressions_set1 <- hsspread_set1 %>%
+  gather(exprmnt, expression, first_pos:last_pos) %>%
+  group_by(rownumber,  ControlType, ProbeName ) %>%
+  summarize( aveexprs = mean(expression) ) %>%
+  ungroup()
+
+large_espression_genes_set1 <- average_expressions_set1 %>%
+  filter(aveexprs > threshold_expression)
+
+largegenes_set1 <- large_espression_genes_set1$rownumber
+
+devspread_set1 <- hsspread_set1 %>%
+  filter( rownumber %in% largegenes_set1 )
+```
+
+
+```{r}
+first_pos = 4
+last_pos = dim(devspread_set1)[2]
+
+empirical.reduced <- pca_timedata( devspread_set1, 0 , first_pos, last_pos ) 
+```
+
+
+
+
+The first component is well correlated with time
+ 
+```{r} 
+p <- ggplot(  empirical.reduced$projections ) + mytheme +
+  aes(
+    x = as.numeric(abstime),
+    y = PC2,
+    colour = dye,
+    shape = batch
+  ) +
+  geom_point( size = 4 )
+show(p)
+```
+
+We can then isolate the first component and project the gene expressio of all the points
+on this axis
+
+```{r}
+#get the PC vector
+vector_reduced <- empirical.reduced$vectors[,2]
+normalization <- sqrt(  t(vector_reduced) %*% vector_reduced )
+
+#define it as a dataframe
+axis_hs_temp <- as.data.frame( vector_reduced ) 
+axis_hs_temp$rownumber <- as.integer( rownames( empirical.reduced$vectors) )
+
+axis_hs_temp <- axis_hs_temp %>%
+  mutate( component = vector_reduced / normalization ) %>%
+  select( -vector_reduced )
+
+# normalize it
+vector_reduced <- vector_reduced / normalization
+
+hsspreadall <- data_heatshock %>%
+  unite( idexp , codeexp, line, genotype, batch, dye, experimentype, abstime, sep = ":"  ) %>%
+  mutate( logintensity = log(intensity) ) %>%
+  filter( rownumber %in% largegenes_set13 ) %>%
+  dplyr::select(-include, -intensity,
+         -agebeginshock, -shockduration) %>%
+  spread( idexp, logintensity ) 
+
+first_pos = 4
+last_pos = dim(hsspreadall)[2]
+projection_hs <- hsspread %>% left_join( axis_hs_temp , fill = 0 ) %>%
+  mutate( component = replace( component , is.na(component), 0  ) ) %>%
+  mutate_each(funs(replace(., which(is.na(.)), 0)),first_pos:last_pos ) %>% 
+  mutate_each(funs( .*component ), first_pos:last_pos  )  %>%
+  select(-component) %>%
+  gather( idexp, value, first_pos:last_pos ) %>%
+  group_by( idexp ) %>%
+  summarise( value = sum(value) ) %>%
+ separate( idexp, c("codeexp","line","genotype", "batch" , "dye","experimentype", "abstime"),  sep = ":")
+
+p <- ggplot(  projection_hs) + mytheme +
+  aes(
+    x = as.numeric(abstime),
+    y = value
+  ) +
+  geom_point( aes(
+    colour =as.factor(batch)
+#    shape = as.factor(batch) 
+    ), size = 3 ) +
+   scale_y_continuous( name = "Projection of hs axis [arbitrary units]"  ) +
+    scale_x_continuous( name = "time [hours]"  ) +
+   guides(shape = guide_legend( title = "batch"), colour = guide_legend( title = "dye")) 
+show(p)
+ 
+```
+
+
+## RILs axis
+
+```{r}
+
+get_axis_RILs <- function( alldata_expr, exprmnt_type, exprmnt_age , nsample = 35 ){
+
+
+  data_devRILs <- alldata_expr %>%
+    filter( include == "in", experimentype == exprmnt_type,  line == "RIL" ) %>%
+    select(-GeneName)
+  
+  chosen_rils <-(data_devRILs %>% select(genotype) %>% distinct())$genotype
+  
+  
+  devRILspread_chosen <- data_devRILs %>%
+    filter( genotype %in% chosen_rils ) %>%
+    unite( idexp , codeexp, line, genotype, batch, dye, experimentype, abstime, sep = ":"  ) %>%
+    mutate( logintensity = log(intensity) ) %>%
+    dplyr::select(-include, -intensity,
+           -agebeginshock, -shockduration) %>%
+    spread( idexp, logintensity ) 
+  
+  first_pos = 4
+  last_pos = dim(hsspread_set1)[2]
+  
+  average_expressions_devRIL <- devRILspread_chosen %>%
+    gather(exprmnt, expression, first_pos:last_pos) %>%
+    group_by(rownumber,  ControlType, ProbeName ) %>%
+    summarize( aveexprs = mean(expression) ) %>%
+    ungroup()
+  
+  large_expressions_devRIL <- average_expressions_devRIL %>%
+    filter(aveexprs > threshold_expression)
+  
+  largegenes_devRIL <- large_expressions_devRIL$rownumber
+  
+  spread_set <- devRILspread_chosen %>%
+    filter( rownumber %in% largegenes_devRIL )
+  
+  first_pos = 4
+  last_pos = dim(spread_set)[2]
+  
+  empirical.reduced <- pca_timedata( spread_set, 0 , first_pos, last_pos ) 
+  
+  #get the PC vector
+  vector_reduced <- empirical.reduced$vectors[,2]
+  normalization <- sqrt(  t(vector_reduced) %*% vector_reduced )
+  
+  #define it as a dataframe
+  axis_RILdev_temp <- as.data.frame( vector_reduced ) 
+  axis_RILdev_temp$rownumber <- as.integer( rownames( empirical.reduced$vectors) )
+  
+  axis_RILdev_temp <- axis_RILdev_temp %>%
+    mutate( component = vector_reduced / normalization ) %>%
+    select( -vector_reduced )
+  
+  
+  # normalize it
+  vector_reduced <- vector_reduced / normalization
+  
+  
+  
+  dev_cmpRIL_spreadall <- alldata_expr %>%
+    filter( include == "in", experimentype == exprmnt_type,  abstime == exprmnt_age ) %>%
+    select(-GeneName) %>%
+    unite( idexp , codeexp, line, genotype, batch, dye, experimentype, abstime, sep = ":"  ) %>%
+    mutate( logintensity = log(intensity) ) %>%
+    dplyr::select(-include, -intensity,
+           -agebeginshock, -shockduration) %>%
+    spread( idexp, logintensity ) 
+  
+  first_pos = 4
+  last_pos = dim(dev_cmpRIL_spreadall)[2]
+  projection_devRIL <- dev_cmpRIL_spreadall %>% left_join( axis_RILdev_temp , fill = 0 ) %>%
+    mutate( component = replace( component , is.na(component), 0  ) ) %>%
+    mutate_each(funs(replace(., which(is.na(.)), 0)),first_pos:last_pos ) %>% 
+    mutate_each(funs( .*component ), first_pos:last_pos  )  %>%
+    select(-component) %>%
+    gather( idexp, value, first_pos:last_pos ) %>%
+    group_by( idexp ) %>%
+    summarise( value = sum(value) ) %>%
+   separate( idexp, c("codeexp","line","genotype", "batch" , "dye","experimentype", "abstime"),  sep = ":")
+  
+#  return( projection_devRIL %>% select(-codeexp,-dye,-experimentype, -abstime) )
+
+  return( axis_RILdev_temp )
+  
+}
+
+dev_RILs_axis <- get_axis_RILs(alldata_expr, "Dev", 46) %>% rename( dev_RILs_temp = component  ) 
+hs_RILs_axis <- get_axis_RILs(alldata_expr, "HS", 48) %>% rename( hs_RILs_temp = component  )
+rec_RILs_axis <- get_axis_RILs(alldata_expr, "Rec", 50) %>% rename( rec_RILs_temp = component  )
+
+RILs_axis <- full_join( full_join(dev_RILs_axis, hs_RILs_axis), rec_RILs_axis)
+
+```
+
+
+
+## Putting everything together
+
+```{r}
+axis_N2 <- full_join(axis_dev %>% rename( dev = component), axis_hs_temp %>% rename( hs_temp = component) ) 
+
+axis_all <- full_join( axis_N2, RILs_axis ) %>%
+  mutate_each(funs(replace(., which(is.na(.)), 0)), 2:6 ) %>%
+#  mutate( dev_RILs = dev_RILs_temp - dev * sum(dev*dev_RILs_temp)  ) %>%
+  mutate( dev_RILs = dev_RILs_temp   ) %>%
+  mutate( dev_RILs = dev_RILs / sqrt(sum(dev_RILs^2)) ) %>%
+  mutate( hs = hs_temp - dev * sum(dev*hs_temp)  ) %>%
+  mutate( hs = hs / sqrt(sum(hs^2)) ) %>%  
+#  mutate( hs_RILs = hs_RILs_temp - dev * sum(dev*hs_RILs_temp ) - dev_RILs_temp * sum( dev_RILs_temp * hs_RILs_temp )
+#                                              - hs * sum(hs*hs_RILs_temp )   ) %>%
+  mutate( hs_RILs = hs_RILs_temp  - dev_RILs_temp * sum( dev_RILs_temp * hs_RILs_temp ) ) %>%
+  mutate( hs_RILs = hs_RILs / sqrt(sum(hs_RILs^2)) ) %>%
+  mutate( rec_RILs = rec_RILs_temp - dev * sum(dev*rec_RILs_temp ) - dev_RILs_temp * sum( dev_RILs_temp * rec_RILs_temp )
+                                             - hs * sum(hs*rec_RILs_temp ) -hs_RILs_temp * sum( hs_RILs_temp  *rec_RILs_temp )  ) %>%
+  mutate( rec_RILs = rec_RILs / sqrt(sum(rec_RILs^2)) ) %>%
+  dplyr::select( -hs_temp, -dev_RILs_temp, -hs_RILs_temp, -rec_RILs_temp ) 
+
+  
+dataspreadall <- alldata_expr %>%
+  unite( idexp , codeexp, line, genotype, batch, dye, experimentype, abstime, sep = ":"  ) %>%
+  mutate( logintensity = log(intensity) ) %>%
+  dplyr::select(-include, -intensity,
+         -agebeginshock, -shockduration, -GeneName) %>%
+  spread( idexp, logintensity ) 
+
+first_pos = 4
+last_pos = dim(dataspreadall)[2]
+
+###ATT if something is NA is one set I am counting it as 0
+projection_all_ondev <- dataspreadall %>% left_join( axis_all %>% select(rownumber,dev)  ) %>%
+  mutate( dev = replace( dev , is.na(dev), 0  ) ) %>%
+  mutate_each( funs(replace(., which(is.na(.)), 0)),
+              - ControlType, -ProbeName, 
+              -rownumber, -dev ) %>% 
+  mutate_each(funs( .*dev ),
+              -ControlType, -ProbeName, 
+              -rownumber, -dev  )  %>%
+  dplyr::select(-dev) %>%
+  gather( idexp, devprojection, first_pos:last_pos ) %>%
+  group_by( idexp ) %>%
+  summarise( devprojection = sum(devprojection) ) %>%
+ separate( idexp, c("codeexp","line","genotype", "batch" , "dye","experimentype", "abstime"),  sep = ":") %>%
+  ungroup()
+
+###ATT if something is NA is one set I am counting it as 0
+projection_all_onhs <- dataspreadall %>% left_join( axis_all  %>% select(rownumber,hs)  ) %>%
+  mutate( hs = replace( hs , is.na(hs), 0  ) ) %>%
+  mutate_each( funs(replace(., which(is.na(.)), 0)),
+              - ControlType, -ProbeName, 
+              -rownumber, -hs ) %>% 
+  mutate_each(funs( .*hs ),
+              -ControlType, -ProbeName, 
+              -rownumber, -hs  )  %>%
+  dplyr::select(-hs) %>%
+  gather( idexp, hsprojection, first_pos:last_pos ) %>%
+  group_by( idexp ) %>%
+  summarise( hsprojection = sum(hsprojection) ) %>%
+ separate( idexp, c("codeexp","line","genotype", "batch" , "dye","experimentype", "abstime"),  sep = ":") %>%
+  ungroup()
+
+###ATT if something is NA is one set I am counting it as 0
+projection_all_ondevRILs <- dataspreadall %>% left_join( axis_all  %>% select(rownumber, dev_RILs)  ) %>%
+  mutate( dev_RILs = replace( dev_RILs , is.na(dev_RILs), 0  ) ) %>%
+  mutate_each( funs(replace(., which(is.na(.)), 0)),
+              - ControlType, -ProbeName, 
+              -rownumber, -dev_RILs ) %>% 
+  mutate_each(funs( .*dev_RILs ),
+              -ControlType, -ProbeName, 
+              -rownumber, -dev_RILs  )  %>%
+  dplyr::select(-dev_RILs) %>%
+  gather( idexp, dev_RILs_projection, first_pos:last_pos ) %>%
+  group_by( idexp ) %>%
+  summarise( dev_RILs_projection = sum(dev_RILs_projection) ) %>%
+ separate( idexp, c("codeexp","line","genotype", "batch" , "dye","experimentype", "abstime"),  sep = ":") %>%
+  ungroup()
+
+
+###ATT if something is NA is one set I am counting it as 0
+projection_all_onhsRILs <- dataspreadall %>% left_join( axis_all  %>% select(rownumber, hs_RILs)  ) %>%
+  mutate( hs_RILs = replace( hs_RILs , is.na(hs_RILs), 0  ) ) %>%
+  mutate_each( funs(replace(., which(is.na(.)), 0)),
+              - ControlType, -ProbeName, 
+              -rownumber, -hs_RILs ) %>% 
+  mutate_each(funs( .*hs_RILs ),
+              -ControlType, -ProbeName, 
+              -rownumber, -hs_RILs  )  %>%
+  dplyr::select(-hs_RILs) %>%
+  gather( idexp, hs_RILs_projection, first_pos:last_pos ) %>%
+  group_by( idexp ) %>%
+  summarise( hs_RILs_projection = sum(hs_RILs_projection) ) %>%
+ separate( idexp, c("codeexp","line","genotype", "batch" , "dye","experimentype", "abstime"),  sep = ":") %>%
+  ungroup()
+
+
+###ATT if something is NA is one set I am counting it as 0
+projection_all_onrecRILs <- dataspreadall %>% left_join( axis_all  %>% select(rownumber, rec_RILs)  ) %>%
+  mutate( rec_RILs = replace( rec_RILs , is.na(rec_RILs), 0  ) ) %>%
+  mutate_each( funs(replace(., which(is.na(.)), 0)),
+              - ControlType, -ProbeName, 
+              -rownumber, -rec_RILs ) %>% 
+  mutate_each(funs( .*rec_RILs ),
+              -ControlType, -ProbeName, 
+              -rownumber, -rec_RILs  )  %>%
+  dplyr::select(-rec_RILs) %>%
+  gather( idexp, rec_RILs_projection, first_pos:last_pos ) %>%
+  group_by( idexp ) %>%
+  summarise( rec_RILs_projection = sum(rec_RILs_projection) ) %>%
+ separate( idexp, c("codeexp","line","genotype", "batch" , "dye","experimentype", "abstime"),  sep = ":") %>%
+  ungroup()
+
+projection_N2 <- full_join(projection_all_ondev, projection_all_onhs  )
+projection_RILs <- full_join( full_join( projection_all_ondevRILs, projection_all_onhsRILs ), projection_all_onrecRILs)
+projection_all <- full_join(projection_N2, projection_RILs  )
+
+alldata_info <- alldata_expr %>% select(-intensity, -ProbeName, -rownumber, -GeneName,-ControlType) %>% distinct()
+projection_all <- full_join(projection_all %>% select(-abstime) ,alldata_info)
+
+
+
+
+
+p <- ggplot(  projection_all %>% filter( line == "PL"  ) ) + mytheme +
+  aes(
+    x = devprojection,
+    y = hsprojection,
+    label = as.character(round(as.numeric(abstime),2) ),
+    colour = paste(experimentype,genotype, sep = "-")
+  ) +
+  geom_text( size = 3 ) +
+   scale_x_continuous( name = "Projection of dev axis [arbitrary units]"  ) +
+   scale_y_continuous( name = "Projection of hs axis [arbitrary units]"  ) 
+show(p)
+```
+
+save stuff
+```{r}
+save( projection_all, file = paste(dirin,"projection_alldata.Rdata",sep="") )
+
+genes <- alldata_expr %>% filter(ControlType == 0) %>% select(rownumber, ProbeName) %>% distinct()
+axis_genes <- left_join(axis_all,genes)
+
+agi.id <-read.table("../../../Code/R_zone/R_Resources/MA_Info_files/agi_id_2014.txt", sep = "\t", quote = '"')
+wbid <- agi.id %>% select(FeatureNum, ProbeName,WBID) %>% rename(rownumber = FeatureNum)
+
+axis_genes_wbid <- left_join(axis_genes, wbid)
+
+save( axis_genes_wbid, file = paste(dirin,"projection_axis.Rdata",sep="") )
+
+```
+
+
+
+Plotting heat-shock axis vs time
+
+```{r}
+p <- ggplot(  projection_all %>% filter( line == "PL" , agebeginshock == 46  )   ) + mytheme +
+  aes(
+    x = as.numeric(abstime),
+    y = hsprojection,
+    colour = as.factor(experimentype),
+    shape = as.factor(genotype)
+  ) +# stat_smooth( se = FALSE , linetype = 2 ) +
+  geom_point( size = 5, alpha = 0.5 ) +
+   scale_x_continuous( name = "time [hours]"  ) +
+   scale_y_continuous( name = "Projection on heat-shock response axis [arbitrary units]"  ) +
+  guides( colour = guide_legend( title = "treatment" ),
+          shape = guide_legend( title = "treatment" )) +
+  theme( legend.position = "bottom"  ) 
+
+show(p)
+
+```
+
+Plotting development-axis vs time
+
+```{r}
+p <- ggplot(  projection_all %>% filter( line == "PL" , agebeginshock == 46  )   ) + mytheme +
+  aes(
+    x = as.numeric(abstime),
+    y = devprojection,
+    colour = as.factor(experimentype),
+    shape = as.factor(genotype)
+  ) +# stat_smooth( se = FALSE , linetype = 2 ) +
+  geom_point( size = 5, alpha = 0.5 ) +
+   scale_x_continuous( name = "time [hours]"  ) +
+   scale_y_continuous( name = "Projection on heat-shock response axis [arbitrary units]"  ) +
+  guides( colour = guide_legend( title = "treatment" ),
+          shape = guide_legend( title = "treatment" )) +
+  theme( legend.position = "bottom"  ) 
+
+show(p)
+
+```
+
+#JU-1941 Recovery
+
+The previous infferred axis does not for JU1941
+
+```{r}
+p <- ggplot(  projection_all %>% filter( experimentype == "Rec", line == "PL" )  ) + mytheme +
+  aes(
+    x = as.numeric(abstime),
+    y = hsprojection,
+    colour = as.factor(genotype)
+  ) +
+  geom_point( size = 3 ) +
+   scale_x_continuous( name = "time [hours]"  ) +
+   scale_y_continuous( name = "Projection on heat-shock response axis [arbitrary units]"  ) +
+  guides( colour = guide_legend( title = "treatment" ),
+          shape = guide_legend( title = "treatment" ))
+show(p)
+```
+
+```{r}
+recoveryspread_JU <- alldata_expr %>%
+  filter( genotype == "JU1941" , experimentype == "Rec", ControlType == 0) %>%
+  unite( idexp , codeexp, line, genotype, batch, dye, experimentype, abstime, sep = ":"  ) %>%
+  mutate( logintensity = log(intensity) ) %>%
+  dplyr::select(-include, -intensity,
+         -agebeginshock, -shockduration,-GeneName) %>%
+  spread( idexp, logintensity )  %>%
+  mutate( aveexpr = rowMeans(.[4:15] ) ) %>%
+  filter( aveexpr > 4.5 ) %>% select( -aveexpr )
+
+
+
+
+ empirical.reduced <- pca_timedata( recoveryspread_JU, 0 , 4, 15 ) 
+
+ p <- ggplot(  empirical.reduced$projections ) + mytheme +
+  aes(
+    x = as.numeric(abstime),
+    y = PC2,
+    colour = dye,
+    shape = batch
+  ) +
+  geom_point( size = 4 )
+show(p)
+
+
+
+```
+
+
+```{r}
+JUaxis <- empirical.reduced$vectors[,2]
+JUaxisnames <- rownames(empirical.reduced$vectors)
+JUaxis <- JUaxis / sqrt(JUaxis %*% JUaxis)
+merge(JUaxisnames, JUaxis)
+N2hs <- axis_genes$hs
+
+
+```
+
+

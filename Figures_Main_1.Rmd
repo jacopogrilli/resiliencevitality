@@ -1,0 +1,248 @@
+---
+output: pdf_document
+---
+
+```{r global_options, include=FALSE}
+rm(list=ls()) ### To clear namespace
+library(knitr)
+opts_chunk$set(eval=TRUE, include = TRUE, echo = TRUE,
+               warning=FALSE, message=FALSE,
+               fig.width=8, fig.height=6)
+```
+
+
+# Development, stress response and recovery.
+
+```{r}
+require(dplyr)
+require(tidyr)
+require(ggplot2)
+require(stats)
+require(gridExtra)
+require(Hmisc)
+
+
+mytheme <- theme_bw() + theme(
+  legend.title  = element_text( size=17),
+  #  legend.position = "bottom",
+  #	legend.direction = "horizontal",
+  legend.key = element_blank(),
+  legend.text  = element_text( size=17),
+  panel.background = element_blank(),
+  panel.grid = element_blank(),
+  text = element_text( family="Helvetica", size=19),
+  panel.border = element_rect( colour = "black", size=2.5),
+  axis.ticks = element_line(size = 2.),
+  strip.background = element_rect( fill = "transparent", size = 2.5, colour = "black"  ),
+  strip.text = element_text(size = 19)
+)
+
+scalecols <- scale_colour_manual(values = c("#009900", "#FF0000", "#0000CC", "#FF8000", "#9933FF", "#00CCCC"))
+### very useful: http://www.rapidtables.com/web/color/RGB_Color.htm
+
+
+pca_timedata <- function( dfdata, control_type , first_column, last_column){
+  
+  dfdata <- dfdata %>% filter( ControlType == control_type ) 
+  rownames(dfdata) <- dfdata$rownumber
+  
+  dataforpca <- na.omit( # remove NAs
+    dfdata
+  )[,first_column:last_column]
+
+  # rescale the expression of all genes
+  #dataforpca <- t( scale(t(dataforpca) , center = TRUE, scale = FALSE  ) )
+  
+  pca <-prcomp(dataforpca,
+           center = TRUE,
+           scale = TRUE)
+
+  pcaresults <- as.data.frame(pca$rotation)
+  pcaresults$exprimnt <- rownames(pcaresults)
+  pcaresults <- pcaresults %>%
+    separate( exprimnt, c("codeexp","line","genotype", "batch" , "dye","experimentype", "abstime"),  sep = ":")
+
+  vectors <- pca$x
+  sdev <- pca$sdev
+  
+  B <- as.matrix(dataforpca)
+  Bsc <- scale(B)
+  Btsc <- scale(t(B))
+  
+  ordertimes <- order( do.call(cbind,strsplit(colnames(B),":"))[5,] )
+  colnames(B) <- do.call(cbind,strsplit(colnames(B),":"))[5,]
+    
+    output <- list( 
+    "sdev" = sdev,
+    "data" = B[,ordertimes],
+    "corrmatrixtimes" = (t(Bsc) %*% Bsc  / (dim(B)[1]-1))[ordertimes,ordertimes] ,
+    #"corrmatrixgenes" = t(Btsc) %*% Btsc  / dim(B)[2] ,
+    "projections" = pcaresults,
+    "vectors" = vectors
+    )
+  
+  return( output )
+  
+}
+
+```
+
+
+
+```{r}
+### IMPORT DATA ###
+
+dirin = "../../../Data/MicroArrays/"
+
+filedata <- paste(dirin,"allexperiments.Rdata",sep="")
+
+load(paste(dirin,"allexperiments.Rdata",sep=""))
+
+
+alldata_expr <- alldata_expr %>%
+  mutate( genotype = replace(genotype, genotype == "CB", "CB4856") )
+
+
+```
+
+
+
+```{r}
+### IMPORT AND NORMALIZE WITHIN ARRAYS ###
+
+filedata = "../../../Data/MicroArrays/projection_alldata.Rdata"
+load(filedata)
+
+filedata = "../../../Data/MicroArrays/projection_axis.Rdata"
+load(filedata)
+projection_all <- projection_all %>% filter(include == "in") %>%
+  mutate( genotype = replace(genotype, genotype == "CB", "CB4856") )
+
+
+
+```
+
+
+
+
+
+
+```{r}
+N2_data <-  projection_all %>%
+                filter( include == "in", genotype == "N2", (experimentype != "HS" | abstime < 54) )  
+
+p1 <- ggplot( N2_data ) +
+  mytheme +
+  aes(
+    x = as.numeric(abstime),
+    y = hsprojection
+  ) +
+     stat_smooth(
+       aes( colour = as.factor(experimentype),
+      x = as.numeric(abstime),
+    y = hsprojection ) ,
+       method = "lm", formula =  y ~ poly(x, 2),
+               size = 2, se = FALSE, geom="line" ) +
+  geom_point( aes(
+    colour =as.factor(experimentype)
+    ), size = 6, alpha = 0.4 ) +
+   scale_y_continuous( name = "Projection on\nenvironmental heat shock axis" , limits = c(-55,70) ) +
+    scale_x_continuous( name = "Time\n(hours after L4 at 20°C)"  ) +
+  theme(legend.position="none") +
+  guides(colour = guide_legend( title = "Experiment type")) +
+    scale_colour_manual(values = c("#0000FF", "#FF0000" ,"#008000","#6B8E23") ) +
+   scale_shape_manual(values = c(0,8)  ) +
+  facet_wrap( ~ genotype )
+show(p1)
+
+
+
+RIL_data <- projection_all %>%
+                filter( include == "in", line == "RIL", (experimentype != "HS" | abstime < 52) ) 
+RIL_data_avg <- RIL_data %>% group_by(experimentype,abstime) %>% summarise(meanproj = mean(hsprojection))
+
+CB_data <- projection_all %>%
+                filter( include == "in", genotype == "CB4856", (experimentype != "HS" | abstime < 52) ) 
+
+
+N2_data_bis <- N2_data
+N2_data_bis$line <- rep( "RIL", dim(N2_data)[1]  )
+N2_data <- rbind(N2_data, N2_data_bis)
+
+strain_name <- list(
+  "PL"="CB4856",
+  "RIL"="RILs"
+)
+strain_labeller <- function(variable,value){
+  return(strain_name[value])
+}
+
+p2 <- ggplot(  ) +
+  mytheme +
+     stat_smooth( data = N2_data,
+       aes( 
+            x = as.numeric(abstime),
+            y = hsprojection,
+            colour = as.factor(experimentype)
+       ) ,
+       method = "lm", formula =  y ~ poly(x, 2),
+               size = 2, se = FALSE, geom="line", alpha = 0.4 ) +
+  geom_boxplot( data = RIL_data,
+       aes( 
+            x = as.numeric(abstime),
+            y = hsprojection,
+            colour = as.factor(experimentype)
+       ) , size = 1.3, alpha = 0.7, outlier.colour = NA, width = 1.3
+    ) +
+    geom_point( data = CB_data,
+       aes( 
+            x = as.numeric(abstime),
+            y = hsprojection,
+            colour = as.factor(experimentype)
+       ) , size = 6, alpha = 0.7, shape = 17
+    ) +
+   scale_y_continuous( name = element_blank() , limits = c(-55,70)  ) +
+    scale_x_continuous( name = "Time\n(hours after L4 at 20°C)"  ) +
+  theme(legend.position="none") +
+  guides(colour = guide_legend( title = "Experiment type")) +
+    scale_colour_manual(values = c("#0000FF", "#FF0000" ,"#008000","#6B8E23") ) +
+   scale_shape_manual(values = c(0,8)  ) +
+  facet_wrap( ~ line , ncol = 1, labeller = strain_labeller)
+show(p2)
+
+
+grid.arrange( arrangeGrob(p1,p2,ncol=2, widths = c(1., 0.55)) )
+
+filenameout = "../../../Figures/Main/Fig1/HSaxis.pdf"
+pdf(filenameout,height=5.32,width=9.36)
+grid.arrange( arrangeGrob(p1,p2,ncol=2, widths = c(1., 0.55)) )
+dev.off()
+
+```
+
+
+
+```{r}
+### CREATE MATRICES
+M <-matrix(runif(50),5,10)
+
+colfunc <- colorRampPalette(c( "white", "#f5793a" ))
+cols <- colfunc(10)[2:10]
+pdf("../../../Figures/Main/Fig1/Mheat.pdf")
+image(M, col= cols)
+dev.off()
+
+
+colfunc <- colorRampPalette(c( "white", "#a95aa1" ))
+cols <- colfunc(10)[2:10]
+pdf("../../../Figures/Main/Fig1/Mrec.pdf")
+image(M, col= cols)
+dev.off()
+
+colfunc <- colorRampPalette(c( "white", "#0000ff" ))
+cols <- colfunc(10)[2:10]
+pdf("../../../Figures/Main/Fig1/Mdev.pdf")
+image(M, col= cols)
+dev.off()
+
+```

@@ -1,0 +1,295 @@
+
+```{r global_options, include=FALSE}
+rm(list=ls()) ### To clear namespace
+library(knitr)
+opts_chunk$set(eval=TRUE, include = TRUE, echo = TRUE,
+               warning=FALSE, message=FALSE,
+               fig.width=8, fig.height=6)
+```
+
+
+
+```{r}
+require(dplyr)
+require(tidyr)
+require(ggplot2)
+require(stats)
+require(gridExtra)
+require(Hmisc)
+require(RColorBrewer)
+
+
+mytheme <- theme_bw() + theme(
+  legend.title  = element_text( size=17),
+  #  legend.position = "bottom",
+  #	legend.direction = "horizontal",
+  legend.key = element_blank(),
+  legend.text  = element_text( size=17),
+  panel.background = element_blank(),
+  panel.grid = element_blank(),
+  text = element_text( family="Helvetica", size=19),
+  panel.border = element_rect( colour = "black", size=2.5),
+  axis.ticks = element_line(size = 2.),
+  strip.background = element_rect( fill = "transparent", size = 2.5, colour = "black"  ),
+  strip.text = element_text(size = 19)
+)
+
+scalecols <- scale_colour_manual(values = c("#009900", "#FF0000", "#0000CC", "#FF8000", "#9933FF", "#00CCCC"))
+### very useful: http://www.rapidtables.com/web/color/RGB_Color.htm
+
+```
+
+
+
+```{r}
+dirin = "../../../Data/MicroArrays/"
+
+filedata <- paste(dirin,"allexperiments.Rdata",sep="")
+
+load(paste(dirin,"allexperiments.Rdata",sep=""))
+
+
+alldata_expr <- alldata_expr %>%
+  mutate( genotype = replace(genotype, genotype == "CB", "CB4856") )
+
+
+filedata = "../../../Data/MicroArrays/projection_alldata.Rdata"
+load(filedata)
+
+filedata = "../../../Data/MicroArrays/projection_axis.Rdata"
+load(filedata)
+projection_all <- projection_all %>% filter(include == "in") %>%
+  mutate( genotype = replace(genotype, genotype == "CB", "CB4856") )
+
+
+filein <- "../../../Data/MicroArrays/enrichment_axis.Rdata"
+load( filein )
+filein <- "../../../Data/MicroArrays/fungenes_GO.Rdata"
+load(filein)
+
+filein <- "../../../Data/MicroArrays/fungenes_KEGG.Rdata"
+load(filein)
+
+
+```
+
+
+# ENRICHMENT
+
+```{r}
+
+
+
+WBID <- axis_genes_wbid %>% dplyr::select(rownumber,WBID) %>% distinct() %>%
+  left_join( fungenes_GO  )
+
+expression_reduced_N2 <- alldata_expr %>%
+  filter(ControlType == 0, include == "in", genotype == "N2") %>%
+  dplyr::select(rownumber,intensity,line, genotype, experimentype, abstime) %>%
+  left_join( WBID  ) %>%
+  group_by( line, genotype, experimentype, abstime, WBID, fun, IDfun) %>%
+  dplyr::summarise( logexpr = mean(log(intensity)) ) %>%
+  ungroup() %>% 
+  group_by( line, genotype, experimentype, abstime ) %>% 
+  ungroup()
+
+
+rm(alldata_expr)
+
+mean_expr <- expression_reduced_N2 %>% filter( !is.na(logexpr)  ) %>%  
+               group_by( experimentype, abstime ) %>% dplyr::summarise( meanexpr = mean(logexpr)  ) %>%
+               ungroup()
+
+expression_reduced_N2 <- left_join(expression_reduced_N2,mean_expr)
+
+
+```
+
+
+```{r}
+
+p <- ggplot( expression_reduced_N2 %>% filter(fun == "regulation of cell migration") %>% 
+               select(experimentype, abstime, WBID, logexpr, meanexpr)
+             ) + mytheme +
+    aes( 
+      x = abstime,
+      y = logexpr - meanexpr,
+      group = as.factor( WBID  )
+      ) + geom_line( colour = "gray", alpha = 0.5  ) +
+  facet_wrap( ~ experimentype )
+p
+```
+
+```{r}
+plot_single_gene <- function( namegene, filenameout ){
+  
+  p <- ggplot( expression_reduced_N2 %>% filter( WBID == namegene, !is.na(logexpr) ) %>% 
+                 select( experimentype, abstime, WBID, logexpr, meanexpr )
+               ) + mytheme +
+      aes( 
+        x = abstime,
+        y = logexpr - meanexpr,
+        colour = as.factor(experimentype)
+        )  +      stat_smooth(
+       method = "lm", formula =  y ~ poly(x, 2) ,
+               size = 2, se = FALSE, geom="line" , alpha = 0.5
+    ) + geom_point( size = 6 ) +
+    scale_x_continuous( "Time" ) +
+    scale_y_continuous( "Relative expression level" ) +
+    scale_colour_manual(values = c("#0000FF", "#FF0000" ,"#008000","#6B8E23")) +
+    theme(legend.position = "none")
+
+  
+    print( fungenes_KEGG %>% filter(WBID == namegene)  )
+
+    pdf(filenameout,height=4.5,width=5.)
+    print(p)
+    dev.off()
+  
+  return(p)
+    
+}
+
+# ### NICE DEV
+# plot_single_gene("WBGene00012540") #nice -> dev -
+# plot_single_gene("WBGene00007560") #nice -> dev - // adult life span
+# plot_single_gene("WBGene00012257") #nice -> dev - // locomotion
+# plot_single_gene("WBGene00011548") #nice -> dev - // 
+# 
+# plot_single_gene("WBGene00018438") #nice -> dev + // protein binding & positive regulation of embryonic development
+# plot_single_gene("WBGene00004750") #nice -> dev + // lot of stuff
+# plot_single_gene("WBGene00004821") #nice -> dev - // protein binding ||| KEGG: cicardian rithm
+# plot_single_gene("WBGene00001435") #nice -> dev - // tr factor
+# 
+# 
+# ### NICE HS
+# plot_single_gene("WBGene00045238") #nice -> hs + // embryonic development ending in birth or egg hatching
+# plot_single_gene("WBGene00016115") # nice -> hs + // lot of stuff
+# 
+# 
+# plot_single_gene("WBGene00011718") # nice -> hs // transmembrane transport GO:0055085
+# plot_single_gene("WBGene00000007") #very nice -> hs - // transport GO:0006810
+# 
+
+#
+
+  filenameout = "../../../Figures/Main/Fig1/HSaxis.pdf"
+
+plot_single_gene("WBGene00007560",  "../../../Figures/Main/Fig2/00007560.pdf") #nice -> dev - // adult life span
+plot_single_gene("WBGene00001435",  "../../../Figures/Main/Fig2/00001435.pdf") #nice -> dev - // tr factor
+
+plot_single_gene("WBGene00016115",  "../../../Figures/Main/Fig2/00016115.pdf") # nice -> hs + // lot of stuff
+plot_single_gene("WBGene00000007",  "../../../Figures/Main/Fig2/00000007.pdf") #very nice -> hs - // transport GO:0006810
+
+```
+
+
+```{r}
+p1 <- ggplot(axis_genes_wbid
+              ) + mytheme + scalecols +
+  aes(
+    x = dev,
+    y = ..count..
+  ) + 
+  geom_freqpoly( size = 1, bins = 70, colour = "#0000FF" ) +
+  scale_x_continuous( name = "Developmental axis components", limits = c(-0.045, 0.045) ) +
+  scale_y_log10( name = "Number of genes" ) 
+p1
+pdf("../../../Figures/Main/Fig2/dev_axis",height=4.,width=5.)
+print(p1)
+dev.off()
+
+  
+p1 <- ggplot(axis_genes_wbid
+              ) + mytheme + scalecols +
+  aes(
+    x = hs,
+    y = ..count..
+  ) + 
+  geom_freqpoly( size = 1, bins = 70 , colour = "#FF0000") +
+  scale_x_continuous( name = "Environmental heat shock axis components", limits = c(-0.045, 0.045) ) +
+  scale_y_log10( name = "Number of genes" ) 
+p1
+pdf("../../../Figures/Main/Fig2/hs_axis",height=4.,width=5.)
+print(p1)
+dev.off()
+
+```
+
+
+
+
+```{r}
+
+
+p <- ggplot( expression_reduced_N2 %>% filter( WBID == , !is.na(logexpr) ) %>% 
+               select( experimentype, abstime, WBID, logexpr, meanexpr )
+             ) + mytheme +
+    aes( 
+      x = abstime,
+      y = logexpr - meanexpr,
+      colour = as.factor(experimentype)
+      ) + geom_line( ) + geom_point() 
+p
+  
+
+
+
+  
+  
+ expression_reduced_N2 %>% filter( IDfun == "GO:0005819", experimentype == "Dev"  ) %>%
+  select(abstime, WBID, logexpr) %>% distinct() %>% spread( abstime, logexpr  )
+rownames(a) <- a$WBID
+b <- as.matrix(a %>% select(-WBID))
+b <- b[order(-rowSums(b)),]
+# b <- b / rowSums(b)
+mypalette<-brewer.pal(9,"Blues")
+
+image(-t(b), col = mypalette)
+```
+
+
+```{r}
+a <- expression_reduced_N2 %>% filter( IDfun == "GO:0005819", experimentype == "Dev"  ) %>%
+  select(abstime, WBID, logexpr) %>% distinct() %>% spread( abstime, logexpr  )
+rownames(a) <- a$WBID
+b <- as.matrix(a %>% select(-WBID))
+b <- b[order(-rowSums(b)),]
+# b <- b / rowSums(b)
+mypalette<-brewer.pal(9,"Blues")
+
+image(-t(b), col = mypalette)
+```
+
+```{r}
+head(enrichment_axis %>% arrange(-ES_hs))
+
+a <- expression_reduced_N2 %>% filter( IDfun == "GO:0009408", experimentype == "HS"  ) %>%
+  select(abstime, WBID, logexpr) %>% distinct() %>% spread( abstime, logexpr  )
+rownames(a) <- a$WBID
+b <- as.matrix(a %>% select(-WBID))
+b <- b[order(-rowSums(b)),]
+b <- b / rowSums(b)
+mypalette<-brewer.pal(9,"Reds")
+b <- b[rowSums(is.na(b))==0, ]
+image(t(b), col = mypalette)
+```
+
+
+```{r}
+high <- unique(( axis_genes_wbid %>% arrange(-hs) )$WBID)
+
+a <- expression_reduced_N2 %>% filter( WBID %in% high, experimentype == "HS"  ) %>%
+  select(abstime, WBID, logexpr) %>% distinct() %>% spread( abstime, logexpr  )
+rownames(a) <- a$WBID
+b <- as.matrix(a %>% select(-WBID))
+b <- b[order(high),]
+b <- b / rowSums(b)
+mypalette<-brewer.pal(9,"Reds")
+
+b <- b[rowSums(is.na(b))==0, ]
+
+image(-t(b), col = mypalette)
+
+```
+

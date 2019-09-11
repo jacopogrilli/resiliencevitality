@@ -1,0 +1,901 @@
+---
+output: pdf_document
+---
+
+```{r global_options, include=FALSE}
+rm(list=ls()) ### To clear namespace
+library(knitr)
+opts_chunk$set(eval=TRUE, include = TRUE, echo = TRUE,
+               warning=FALSE, message=FALSE,
+               fig.width=8, fig.height=6)
+```
+
+
+# Development, stress response and recovery.
+
+```{r}
+require(dplyr)
+require(tidyr)
+require(ggplot2)
+require(stats)
+
+
+
+mytheme <- theme_bw() + theme(
+  legend.title  = element_text( size=6),
+  #  legend.position = "bottom",
+  #	legend.direction = "horizontal",
+  legend.key = element_blank(),
+  legend.text  = element_text( size=6),
+  panel.background = element_blank(),
+  panel.grid = element_blank(),
+  text = element_text( family="Helvetica", size=9),
+  panel.border = element_rect( colour = "black", size=1),
+  axis.ticks = element_line(size = 1.)
+)
+
+
+```
+
+
+
+```{r}
+### IMPORT AND NORMALIZE WITHIN ARRAYS ###
+
+filedata = "../../../Data/MicroArrays/projection_alldata.Rdata"
+
+load(filedata)
+
+```
+
+
+#Parental lines
+
+
+Plotting heat-shock axis vs time
+
+```{r}
+p <- ggplot(  ) + mytheme +   geom_point(
+  data = projection_all %>% filter( line == "PL" , agebeginshock == 46 , include == "in" )   ,
+  aes(
+    x = as.numeric(abstime),
+    y = hsprojection,
+    colour = as.factor(experimentype),
+    shape = as.factor(genotype)
+  ) ,
+ size = 5, alpha = 0.5 ) +
+  stat_smooth( data =  projection_all %>% filter( line == "PL" , agebeginshock == 46 , include == "in" ) ,
+               aes(     x = as.numeric(abstime),
+                      y = hsprojection,
+                      colour = as.factor(experimentype) ),
+               se = FALSE , linetype = 2 ) +
+     scale_x_continuous( name = "time [hours]"  ) +
+   scale_y_continuous( name = "Projection on heat-shock response axis [arbitrary units]"  ) +
+  guides( colour = guide_legend( title = "treatment" ),
+          shape = guide_legend( title = "treatment" )) +
+  theme( legend.position = "bottom"  ) 
+
+show(p)
+
+```
+
+Plotting development-axis vs time
+
+```{r}
+p <- ggplot(  projection_all %>% filter( line == "PL" , agebeginshock == 46   , include == "in")  ) + mytheme +
+  aes(
+    x = as.numeric(abstime),
+    y = devprojection,
+    colour = as.factor(experimentype),
+    shape = as.factor(genotype)
+  ) +# stat_smooth( se = FALSE , linetype = 2 ) +
+  geom_point( size = 5, alpha = 0.5 ) +
+   scale_x_continuous( name = "time [hours]"  ) +
+   scale_y_continuous( name = "Projection on heat-shock response axis [arbitrary units]"  ) +
+  guides( colour = guide_legend( title = "treatment" ),
+          shape = guide_legend( title = "treatment" )) +
+  theme( legend.position = "bottom"  ) 
+
+show(p)
+
+```
+
+#Considering RILs and NILs
+
+```{r}
+p <- ggplot( ) + mytheme +
+  geom_point( data = projection_all %>% filter( line == "PL" , agebeginshock == 46 , include == "in" ),
+              aes( 
+                    x = as.numeric(abstime),
+                    y = hsprojection,
+                    colour = as.factor(experimentype)
+                ), alpha = 0.4, size = 5 )+
+    geom_point( data = projection_all %>% filter( line != "PL" , agebeginshock == 46 , include == "in" ),
+              aes( 
+                    x = as.numeric(abstime),
+                    y = hsprojection,
+                    colour = as.factor(experimentype)
+                ), shape = 21, alpha = 1, size = 3 )+
+   scale_x_continuous( name = "time [hours]"  ) +
+   scale_y_continuous( name = "Projection on heat-shock response axis [arbitrary units]"  ) +
+  guides( colour = guide_legend( title = "treatment" ),
+          shape = guide_legend( title = "treatment" )) +
+  theme( legend.position = "bottom"  ) 
+  
+
+show(p)
+
+```
+
+```{r}
+p <- ggplot( ) + mytheme +
+  geom_point( data = projection_all %>% filter( line == "PL" , agebeginshock == 46 , include == "in", experimentype == "Dev" ),
+              aes( 
+                    x = as.numeric(abstime),
+                    y = -devprojection,
+                    colour = as.factor(genotype),
+                    shape = as.factor(genotype)
+                ), alpha = 0.4, size = 8 )+
+    geom_point( data = projection_all %>% filter( line == "RIL" , agebeginshock == 46 , include == "in", experimentype == "Dev" ),
+              aes( 
+                    x = as.numeric(abstime),
+                    y = -devprojection,
+                    colour = as.factor(line)
+                ), shape = 21, alpha = 1, size = 3 )+
+   scale_x_continuous( name = "time [hours]"  ) +
+   scale_y_continuous( name = "Projection on development axis [arbitrary units]"  ) +
+  guides( colour = guide_legend( title = "treatment" ),
+          shape = guide_legend( title = "treatment" )) +
+  theme( legend.position = "bottom"  ) 
+
+show(p)
+
+```
+
+
+
+```{r}
+hs_projections <- projection_all %>%
+  filter( include == "in", agebeginshock == 46, shockduration <=2, (abstime == 46.0 | abstime == 48.0 | abstime == 50.0 ) ) %>%
+  select(-codeexp, -agebeginshock, -shockduration, dye, -abstime, -devprojection, -include ) %>%
+  group_by(line, genotype, batch, experimentype) %>%
+  summarize( hsprojection = mean(hsprojection) ) %>% ungroup() %>%
+  spread( experimentype, hsprojection )
+
+```
+
+```{r}
+p <- ggplot( ) + mytheme +
+  geom_abline(slope = 1) +
+  geom_point( data = hs_projections %>% filter( line == "PL"  ),
+              aes( 
+                    x = Dev,
+                    y = HS,
+                    colour = as.factor(genotype)
+                ), alpha = 0.4, size = 5 )+
+    geom_point( data = hs_projections %>% filter( line != "PL"  ),
+              aes( 
+                    x = Dev,
+                    y = HS,
+                    shape = as.factor(line)
+                ), colour = "black", alpha = 1, size = 3 )+
+   scale_x_continuous( name = "Projection on heat-shock response axis before heat shock"  ) +
+   scale_y_continuous( name = "Projection on heat-shock response axis after 2 h"  ) +
+  guides( colour = guide_legend( title = "treatment" ),
+          shape = guide_legend( title = "treatment" )) +
+  theme( legend.position = "bottom"  ) 
+
+show(p)
+
+```
+
+
+```{r}
+p <- ggplot( ) + mytheme +
+    geom_abline(slope = 1) +
+  geom_point( data = hs_projections %>% filter( line == "PL"  ),
+              aes( 
+                    x = HS,
+                    y = Rec,
+                    colour = as.factor(genotype)
+                ), alpha = 0.4, size = 5 )+
+    geom_point( data = hs_projections %>% filter( line != "PL"  ),
+              aes( 
+                    x = HS,
+                    y = Rec,
+                    shape = as.factor(line)
+                ), colour = "black", alpha = 1, size = 3 )+
+     scale_x_continuous( name = "Projection on heat-shock response axis after 2 h" ) +
+   scale_y_continuous( name = "Projection on heat-shock response axis after 2 h recovery"  ) +
+  guides( colour = guide_legend( title = "treatment" ),
+          shape = guide_legend( title = "treatment" )) +
+  theme( legend.position = "bottom"  ) 
+
+show(p)
+```
+
+```{r}
+p <- ggplot( ) + mytheme +
+    geom_abline(slope = 1) +
+  geom_point( data = hs_projections %>% filter( line == "PL"  ),
+              aes( 
+                    x = Dev,
+                    y = Rec,
+                    colour = as.factor(genotype)
+                ), alpha = 0.4, size = 5 )+
+    geom_point( data = hs_projections %>% filter( line != "PL"  ),
+              aes( 
+                    x = Dev,
+                    y = Rec,
+                    shape = as.factor(line)
+                ), colour = "black", alpha = 1, size = 3 )+
+   scale_x_continuous( name = "Projection on heat-shock response axis before heat shock"  ) +
+   scale_y_continuous( name = "Projection on heat-shock response axis after 2 h recovery"  ) +
+  guides( colour = guide_legend( title = "treatment" ),
+          shape = guide_legend( title = "treatment" )) +
+  theme( legend.position = "bottom"  ) 
+
+show(p)
+```
+
+
+#Lifespan
+
+```{r}
+filelifespan <- "../../../Data/LifeSpan/Lifespan_GRAPPLE.txt"
+lifespans <- read.csv( filelifespan, sep = "\t") %>%
+  rename(genotype = Genotype) 
+
+projection_lifespan <- inner_join(lifespans, hs_projections)
+
+```
+
+
+```{r}
+p <- ggplot( ) + mytheme +
+  geom_point( data = projection_lifespan %>% filter( line == "PL", Treatment == "ct"  ),
+              aes( 
+                    x = life.mean,
+                    y = HS,
+                    colour = as.factor(genotype)
+                ), alpha = 0.4, size = 5 )+
+    geom_point( data = projection_lifespan %>% filter( line != "PL" , Treatment == "ct" ),
+              aes( 
+                    x = life.mean,
+                    y = Rec,
+                    shape = as.factor(line)
+                ), colour = "black", alpha = 1, size = 3 )+
+   scale_x_continuous( name = "lifespan"  ) +
+   scale_y_continuous(   ) +
+  guides( colour = guide_legend( title = "treatment" ),
+          shape = guide_legend( title = "treatment" )) +
+  theme( legend.position = "bottom"  ) 
+
+show(p)
+```
+
+```{r}
+p <- ggplot( ) + mytheme +
+  geom_point( data = projection_lifespan %>% filter( line == "PL", Treatment == "ct"  ),
+              aes( 
+                    x = life.mean,
+                    y = Rec,
+                    colour = as.factor(genotype)
+                ), alpha = 0.4, size = 5 )+
+    geom_point( data = projection_lifespan %>% filter( line != "PL" , Treatment == "ct" ),
+              aes( 
+                    x = life.mean,
+                    y = Rec,
+                    shape = as.factor(line)
+                ), colour = "black", alpha = 1, size = 3 )+
+   scale_x_continuous( name = "lifespan"  ) +
+   scale_y_continuous(   ) +
+  guides( colour = guide_legend( title = "treatment" ),
+          shape = guide_legend( title = "treatment" )) +
+  theme( legend.position = "bottom"  ) 
+
+show(p)
+```
+
+
+
+```{r}
+p <- ggplot( ) + mytheme +
+    geom_point( data = projection_lifespan %>% filter( line == "NIL" , Treatment == "ct" ),
+              aes( 
+                    x = life.mean,
+                    y = Rec,
+                    shape = as.factor(line)
+                ), colour = "black", alpha = 1, size = 3 )+
+   scale_x_continuous( name = "lifespan"  ) +
+   scale_y_continuous(   ) +
+  guides( colour = guide_legend( title = "treatment" ),
+          shape = guide_legend( title = "treatment" )) +
+  theme( legend.position = "bottom"  ) 
+
+show(p)
+```
+
+
+```{r}
+p <- ggplot( ) + mytheme +
+    geom_point( data = projection_lifespan %>% filter( line == "RIL" , Treatment == "ct" ),
+              aes( 
+                    x = life.mean,
+                    y = Rec,
+                    shape = as.factor(line)
+                ), colour = "black", alpha = 1, size = 3 )+
+   scale_x_continuous( name = "lifespan"  ) +
+   scale_y_continuous(   ) +
+  guides( colour = guide_legend( title = "treatment" ),
+          shape = guide_legend( title = "treatment" )) +
+  theme( legend.position = "bottom"  ) 
+
+show(p)
+```
+
+rescale recovery by hs and dev
+
+```{r}
+p <- ggplot( ) + mytheme +
+    geom_point( data = projection_lifespan %>% filter( line == "NIL" , Treatment == "ct" ),
+              aes( 
+                    x = life.mean,
+                    y = (HS-Rec)/(HS-Dev),
+                    shape = as.factor(line)
+                ), colour = "black", alpha = 1, size = 3 )+
+   scale_x_continuous( name = "lifespan"  ) +
+   scale_y_continuous(   ) +
+  guides( colour = guide_legend( title = "treatment" ),
+          shape = guide_legend( title = "treatment" )) +
+  theme( legend.position = "bottom"  ) 
+
+show(p)
+```
+
+```{r}
+p <- ggplot( ) + mytheme +
+    geom_point( data = projection_lifespan %>% filter( line == "RIL" , Treatment == "ct" ),
+              aes( 
+                    x = life.mean,
+                    y = (HS-Rec)/(HS-Dev),
+                    shape = as.factor(line)
+                ), colour = "black", alpha = 1, size = 3 )+
+   scale_x_continuous( name = "lifespan"  ) +
+   scale_y_continuous(   ) +
+  guides( colour = guide_legend( title = "treatment" ),
+          shape = guide_legend( title = "treatment" )) +
+  theme( legend.position = "bottom"  ) 
+
+show(p)
+```
+
+
+## Use RILS axis
+
+```{r}
+
+allprojection_lifespan <- inner_join(lifespans, projection_all)
+
+```
+
+
+```{r}
+p <- ggplot( ) + mytheme +
+ geom_point(  data = allprojection_lifespan %>% filter(abstime == 50 , experimentype == "Rec", Treatment == "ct", line != "PL") ,
+              aes( 
+                    x = life.mean,
+                    y = dev_RILs_projection,
+                    shape = as.factor(line),
+                    colour = as.factor(line)
+                ),   size = 3, alpha = 0.7) +
+   geom_text(  data = allprojection_lifespan %>% filter(abstime == 50 , experimentype == "Rec", Treatment == "ct", line == "PL") ,
+              aes( 
+                    x = life.mean,
+                    y = dev_RILs_projection,
+                    label = as.factor(genotype)
+                ), colour = 3,   size = 5, alpha = 0.7) +
+   scale_x_continuous( name = "lifespan"  ) +
+   scale_y_continuous(   ) +
+  guides( colour = guide_legend( title = "treatment" ),
+          shape = guide_legend( title = "treatment" )) +
+  theme( legend.position = "bottom"  ) 
+
+show(p)
+```
+
+
+```{r}
+p <- ggplot( ) + mytheme +
+ geom_point(  data = allprojection_lifespan %>% filter(abstime == 50 , experimentype == "Rec", Treatment == "ct", line != "PL") ,
+              aes( 
+                    x = life.mean,
+                    y = hs_RILs_projection,
+                    shape = as.factor(line),
+                    colour = as.factor(line)
+                ),   size = 3, alpha = 0.7) +
+   geom_text(  data = allprojection_lifespan %>% filter(abstime == 50 , experimentype == "Rec", Treatment == "ct", line == "PL") ,
+              aes( 
+                    x = life.mean,
+                    y = hs_RILs_projection,
+                    label = as.factor(genotype)
+                ), colour = 3,   size = 5, alpha = 0.7) +
+   scale_x_continuous( name = "lifespan"  ) +
+   scale_y_continuous(   ) +
+  guides( colour = guide_legend( title = "treatment" ),
+          shape = guide_legend( title = "treatment" )) +
+  theme( legend.position = "bottom"  ) 
+
+show(p)
+```
+
+
+```{r}
+p <- ggplot( ) + mytheme +
+ geom_point(  data = allprojection_lifespan %>% filter(abstime == 50 , experimentype == "Rec", Treatment == "ct", line != "PL") ,
+              aes( 
+                    x = life.mean,
+                    y = rec_RILs_projection,
+                    shape = as.factor(line),
+                    colour = as.factor(line)
+                ),   size = 3, alpha = 0.7) +
+   geom_text(  data = allprojection_lifespan %>% filter(abstime == 50 , experimentype == "Rec", Treatment == "ct", line == "PL") ,
+              aes( 
+                    x = life.mean,
+                    y = rec_RILs_projection,
+                    label = as.factor(genotype)
+                ), colour = 3,   size = 5, alpha = 0.7) +
+   scale_x_continuous( name = "lifespan"  ) +
+   scale_y_continuous(   ) +
+  guides( colour = guide_legend( title = "treatment" ),
+          shape = guide_legend( title = "treatment" )) +
+  theme( legend.position = "bottom"  ) 
+
+show(p)
+```
+
+
+### Heat shock survival
+
+```{r}
+p <- ggplot( ) + mytheme +
+ geom_point(  data = allprojection_lifespan %>% filter(abstime == 50 , experimentype == "Rec", Treatment == "hs", line != "PL") ,
+              aes( 
+                    x = life.mean,
+                    y = dev_RILs_projection,
+                    shape = as.factor(line),
+                    colour = as.factor(line)
+                ),   size = 3, alpha = 0.7) +
+   geom_text(  data = allprojection_lifespan %>% filter(abstime == 50 , experimentype == "Rec", Treatment == "hs", line == "PL") ,
+              aes( 
+                    x = life.mean,
+                    y = dev_RILs_projection,
+                    label = as.factor(genotype)
+                ), colour = 3,   size = 5, alpha = 0.7) +
+   scale_x_continuous( name = "lifespan"  ) +
+   scale_y_continuous(   ) +
+  guides( colour = guide_legend( title = "treatment" ),
+          shape = guide_legend( title = "treatment" )) +
+  theme( legend.position = "bottom"  ) 
+
+show(p)
+```
+
+
+```{r}
+p <- ggplot( ) + mytheme +
+ geom_point(  data = allprojection_lifespan %>% filter(abstime == 50 , experimentype == "Rec", Treatment == "hs", line != "PL") ,
+              aes( 
+                    x = life.mean,
+                    y = hs_RILs_projection,
+                    shape = as.factor(line),
+                    colour = as.factor(line)
+                ),   size = 3, alpha = 0.7) +
+   geom_text(  data = allprojection_lifespan %>% filter(abstime == 50 , experimentype == "Rec", Treatment == "hs", line == "PL") ,
+              aes( 
+                    x = life.mean,
+                    y = hs_RILs_projection,
+                    label = as.factor(genotype)
+                ), colour = 3,   size = 5, alpha = 0.7) +
+   scale_x_continuous( name = "lifespan"  ) +
+   scale_y_continuous(   ) +
+  guides( colour = guide_legend( title = "treatment" ),
+          shape = guide_legend( title = "treatment" )) +
+  theme( legend.position = "bottom"  ) 
+
+show(p)
+```
+
+
+```{r}
+p <- ggplot( ) + mytheme +
+ geom_point(  data = allprojection_lifespan %>% filter(abstime == 50 , experimentype == "Rec", Treatment == "hs", line != "PL") ,
+              aes( 
+                    x = life.mean,
+                    y = rec_RILs_projection,
+                    shape = as.factor(line),
+                    colour = as.factor(line)
+                ),   size = 3, alpha = 0.7) +
+   geom_text(  data = allprojection_lifespan %>% filter(abstime == 50 , experimentype == "Rec", Treatment == "hs", line == "PL") ,
+              aes( 
+                    x = life.mean,
+                    y = rec_RILs_projection,
+                    label = as.factor(genotype)
+                ), colour = 3,   size = 5, alpha = 0.7) +
+   scale_x_continuous( name = "lifespan"  ) +
+   scale_y_continuous(   ) +
+  guides( colour = guide_legend( title = "treatment" ),
+          shape = guide_legend( title = "treatment" )) +
+  theme( legend.position = "bottom"  ) 
+
+show(p)
+```
+
+
+### Life mean vs Rec
+
+```{r}
+
+data_ls <- allprojection_lifespan %>%
+  filter(abstime == 50 , experimentype == "Rec") %>%
+  select(genotype, Treatment, line, life.mean, hs_RILs_projection) %>%
+  spread(Treatment, life.mean) %>%
+  rename( lifemean_ct =  ct, lifemean_hs = hs)
+
+p <- ggplot( data_ls %>% filter(line != "PL")  ) + mytheme +
+  aes( 
+                    x = lifemean_hs/lifemean_ct,
+                    y = hs_RILs_projection,
+                    shape = as.factor(line),
+                    colour = as.factor(line)
+                ) +
+  geom_point( size = 5, alpha = 0.7) +
+   scale_x_continuous( name = "lifespan"  ) +
+   scale_y_continuous(name = "HS response - RILs axis"   ) +
+  theme( legend.position = "bottom"  ) + facet_wrap(~line, scales = "free") 
+
+show(p)
+
+# RILS
+data_RIls <- data_ls %>% filter(line == "RIL")
+cor.test( data_RIls$lifemean_hs/data_RIls$lifemean_ct,  data_RIls$hs_RILs_projection  )
+
+#NIL
+data_NIls <- data_ls %>% filter(line == "NIL")
+cor.test( data_NIls$lifemean_hs/data_NIls$lifemean_ct,  data_NIls$hs_RILs_projection  )
+
+
+```
+
+
+```{r}
+
+data_ls <- allprojection_lifespan %>%
+  filter(abstime == 48 , experimentype == "HS") %>%
+  select(genotype, Treatment, line, life.mean, hs_RILs_projection) %>%
+  spread(Treatment, life.mean) %>%
+  rename( lifemean_ct =  ct, lifemean_hs = hs)
+
+p <- ggplot( data_ls %>% filter(line != "PL")  ) + mytheme +
+  aes( 
+                    x = lifemean_hs/lifemean_ct,
+                    y = hs_RILs_projection,
+                    shape = as.factor(line),
+                    colour = as.factor(line)
+                ) +
+  geom_point( size = 5, alpha = 0.7) +
+   scale_x_continuous( name = "lifespan"  ) +
+   scale_y_continuous(name = "HS response - RILs axis"   ) +
+  theme( legend.position = "bottom"  ) + facet_wrap(~line, scales = "free") 
+
+show(p)
+
+# RILS
+data_RIls <- data_ls %>% filter(line == "RIL")
+cor.test( data_RIls$lifemean_hs/data_RIls$lifemean_ct,  data_RIls$hs_RILs_projection  )
+
+#NIL
+data_NIls <- data_ls %>% filter(line == "NIL")
+cor.test( data_NIls$lifemean_hs/data_NIls$lifemean_ct,  data_NIls$hs_RILs_projection  )
+
+
+```
+
+
+## Below not important
+
+### Heat shock response correlation lifespan
+
+
+```{r}
+p <- ggplot( ) + mytheme +
+ geom_point(  data = allprojection_lifespan %>% filter(abstime == 50 , experimentype == "Rec", Treatment == "hs", line == "RIL") ,
+              aes( 
+                    x = life.mean,
+                    y = hs_RILs_projection
+                ),   size = 3, alpha = 0.7) +
+   scale_x_continuous( name = "lifespan"  ) +
+   scale_y_continuous(   ) +
+  guides( colour = guide_legend( title = "treatment" ),
+          shape = guide_legend( title = "treatment" )) +
+  theme( legend.position = "bottom"  ) 
+
+show(p)
+
+data <- allprojection_lifespan %>% filter(abstime == 50 , experimentype == "Rec", Treatment == "hs", line == "RIL")
+
+cor.test( data$life.mean,  data$hs_RILs_projection  )
+```
+
+```{r}
+filelifespan_raw = "../../../Data/LifeSpan/Raw/Mark_files on RIL/LifespanRaw_Grapple.txt"
+lifespan.data <- read.csv(file=filelifespan_raw,sep = "\t") %>% filter(Use_data != "CRAP")
+
+#absolute number of dead worms per day
+lifespan.data.2 <- cbind(lifespan.data[,c(1:9)],abs(data.matrix(lifespan.data[,-c(1:9)])-data.matrix(lifespan.data[,-c(1:8, ncol(lifespan.data))])))
+
+#now I get the maximum of dead worms (the number of original worms per plate)
+life.list <- mutate(lifespan.data,n=X51) %>%
+             gather(key="day",value="dead",-c(Genotype:Comment),-n) %>%
+             mutate(day=as.numeric(gsub("X","",day)),alive=n-dead,perc_alive=(n-dead)/n*100)
+#And I merge this list with the deaths per day
+life.list <- gather(lifespan.data.2,key="day",value="dead_per_day",-c(Genotype:Comment)) %>%
+             mutate(day=as.numeric(gsub("X","",day))) %>%
+             merge(life.list)
+
+life.list <- life.list %>% rename( genotype = Genotype, line = Type ) 
+  
+  
+  
+  
+```
+
+
+```{r}
+threshold_ls = 4
+
+p <- ggplot(life.list %>% filter(genotype == "N2" | genotype == "CB4856"  ) %>% group_by(genotype,day, Treatment) %>%
+              summarize( deadfrac = mean(dead_per_day/n) ) %>%
+              ungroup()  ) + mytheme +
+  geom_vline(xintercept = threshold_ls ) +
+  aes(
+    x = day,
+    y = deadfrac,
+    colour = as.factor(paste(Treatment,genotype))
+  ) + geom_point() + geom_line()
+show(p)
+
+allprojection_lifespan <- inner_join(life.list %>% filter( day == threshold_ls), projection_all %>% filter(include == "in") %>%
+                                       mutate( genotype = toupper(genotype)  ))
+```
+
+
+```{r}
+p <- ggplot( ) + mytheme +
+ geom_point(  data = allprojection_lifespan %>% filter(abstime == 48 , experimentype == "HS", Treatment == "hs", line == "RIL") ,
+              aes( 
+                    x = perc_alive,
+                    y = hs_RILs_projection
+                ),   size = 3, alpha = 0.7) +
+   scale_x_continuous( name = "lifespan"  ) +
+   scale_y_continuous(   ) +
+  guides( colour = guide_legend( title = "treatment" ),
+          shape = guide_legend( title = "treatment" )) +
+  theme( legend.position = "bottom"  ) 
+
+show(p)
+
+data <- allprojection_lifespan %>% filter(abstime == 48 , experimentype == "HS", Treatment == "hs", line == "RIL")
+
+cor.test( data$perc_alive,  data$hs_RILs_projection  )
+
+```
+
+
+```{r}
+p <- ggplot( ) + mytheme +
+ geom_point(  data = allprojection_lifespan %>% filter(abstime == 50 , experimentype == "Rec", Treatment == "hs", line == "RIL") ,
+              aes( 
+                    x = perc_alive,
+                    y = hs_RILs_projection
+                ),   size = 5, alpha = 0.3) +
+   scale_x_continuous( name = "lifespan"  ) +
+   scale_y_continuous(   ) +
+  guides( colour = guide_legend( title = "treatment" ),
+          shape = guide_legend( title = "treatment" )) +
+  theme( legend.position = "bottom"  ) 
+
+show(p)
+
+data <- allprojection_lifespan %>% filter(abstime == 50 , experimentype == "Rec", Treatment == "hs", line == "RIL")
+
+cor.test( data$perc_alive,  data$hs_RILs_projection  )
+
+```
+
+
+
+```{r}
+threshold_ls = 13
+
+percalive <- life.list %>%
+  select(-Comment, -Day_start,-Geno.use,  -dead_per_day,-n, -dead, -alive) %>%
+  spread(Treatment, perc_alive) %>%
+  rename( perc_alive_ct = ct, perc_alive_hs = hs )
+
+
+p <- ggplot(  percalive %>% filter(line == "RIL", !is.na( perc_alive_hs)) %>%
+                select(-genotype, -line, -Batch, -Use_data) %>%
+                group_by( day ) %>%
+                summarize_each(funs(mean)) %>% ungroup()
+                ) + mytheme + geom_vline(xintercept = threshold_ls) +
+                aes( 
+                    y = perc_alive_hs/perc_alive_ct,
+                    x = day
+                ) + geom_point()  + geom_line() +
+   scale_x_continuous( name = "lifespan"  ) +
+   scale_y_continuous( ) +
+  guides( colour = guide_legend( title = "treatment" ),
+          shape = guide_legend( title = "treatment" )) +
+  theme( legend.position = "bottom"  ) 
+show(p)
+
+p <- ggplot(  percalive %>% filter(line == "RIL", !is.na( perc_alive_hs)) ) +
+  mytheme + geom_vline(xintercept = threshold_ls) +
+                aes( 
+                    y = perc_alive_hs/perc_alive_ct,
+                    x = day,
+                    colour = as.factor(genotype)
+                ) + geom_point()  + geom_line() +
+   scale_x_continuous( name = "lifespan"  ) +
+   scale_y_continuous( ) +
+  guides( colour = guide_legend( title = "treatment" ),
+          shape = guide_legend( title = "treatment" )) +
+  theme( legend.position = "none"  ) 
+show(p)
+
+
+allprojection_lifespan <- inner_join( percalive %>% filter( day == threshold_ls), projection_all %>% filter(include == "in") %>%
+                                       mutate( genotype = toupper(genotype)  ))
+
+proj_RILs_hs <- allprojection_lifespan %>%
+  filter(line == "RIL") %>%
+  select( genotype, perc_alive_hs, perc_alive_ct, experimentype, hs_RILs_projection ) %>%
+  group_by(genotype, perc_alive_hs,perc_alive_ct, experimentype) %>% summarize( hsmean = mean(hs_RILs_projection) ) %>%
+  ungroup() %>%
+  spread( experimentype, hsmean)
+
+p <- ggplot( ) + mytheme +
+ geom_point(  data = proj_RILs_hs ,
+              aes( 
+                    y = perc_alive_hs/perc_alive_ct,
+                    x = Rec
+                ),   size = 5, alpha = 0.3) +
+   scale_y_continuous( name = "lifespan"  ) +
+   scale_x_continuous( ) +
+  guides( colour = guide_legend( title = "treatment" ),
+          shape = guide_legend( title = "treatment" )) +
+  theme( legend.position = "bottom"  ) 
+
+show(p)
+
+cor.test( proj_RILs_hs$perc_alive_hs / proj_RILs_hs$perc_alive_ct , proj_RILs_hs$Rec  )
+
+```
+
+
+#Physiological age vs lifespan et al
+
+```{r}
+
+phys_age <- projection_all %>% filter(line == "RIL", experimentype == "Dev") %>%
+  select(genotype, devprojection)
+
+HS_recomb <- projection_all %>% filter(line == "RIL", experimentype == "Dev") %>%
+  select(genotype, hs_RILs_projection)  
+  
+physageHS <- inner_join( phys_age, HS_recomb )  
+  
+p <- ggplot( ) + mytheme +
+ geom_point(  data = physageHS ,
+              aes( 
+                    y = hs_RILs_projection,
+                    x = devprojection
+                ),   size = 5, alpha = 0.3) +
+   scale_y_continuous( name = "HS"  ) +
+   scale_x_continuous( name = "Physiologial age" ) +
+  guides( colour = guide_legend( title = "treatment" ),
+          shape = guide_legend( title = "treatment" )) +
+  theme( legend.position = "bottom"  ) 
+show(p)
+
+cor.test( physageHS$devprojection, physageHS$hs_RILs_projection  )
+```
+
+
+```{r}
+
+phys_age <- allprojection_lifespan %>% filter(line == "RIL", experimentype == "Dev", Treatment == "ct") %>%
+  select(genotype, devprojection)
+
+HS_recomb <- allprojection_lifespan  %>% filter(line == "RIL", experimentype == "Rec", Treatment == "ct") %>%
+  select(genotype, hs_RILs_projection)  
+  
+physageHS <- inner_join( phys_age, HS_recomb )  
+
+p <- ggplot( ) + mytheme +
+ geom_point(  data = physageHS ,
+              aes( 
+                    y = hs_RILs_projection,
+                    x = devprojection
+                ),   size = 5, alpha = 0.3) +
+   scale_y_continuous( name = "HS"  ) +
+   scale_x_continuous( name = "Physiologial age" ) +
+  guides( colour = guide_legend( title = "treatment" ),
+          shape = guide_legend( title = "treatment" )) +
+  theme( legend.position = "bottom"  ) 
+show(p)
+
+cor.test( physageHS$devprojection, physageHS$hs_RILs_projection  )
+```
+
+```{r}
+p <- ggplot( ) + mytheme +
+ geom_point(  data = phys_age ,
+              aes( 
+                    y = life.mean,
+                    x = devprojection
+                ),   size = 5, alpha = 0.3) +
+   scale_y_continuous( name = "devproj"  ) +
+   scale_x_continuous( name = "life span" ) +
+  guides( colour = guide_legend( title = "treatment" ),
+          shape = guide_legend( title = "treatment" )) +
+  theme( legend.position = "bottom"  ) 
+show(p)
+
+cor.test( physageHS$devprojection, physageHS$life.mean  )
+```
+
+
+HS RILs before, during, after
+
+```{r}
+Dev_HS <- allprojection_lifespan %>% filter(line == "RIL", experimentype == "Dev", Treatment == "ct") %>%
+  select(genotype, hs_RILs_projection) %>% rename(Dev = hs_RILs_projection  )
+
+HS_HS <- allprojection_lifespan  %>% filter(line == "RIL", experimentype == "HS", Treatment == "ct") %>%
+  select(genotype, hs_RILs_projection)   %>% rename(HS = hs_RILs_projection  )
+
+Rec_HS <- allprojection_lifespan  %>% filter(line == "RIL", experimentype == "Rec", Treatment == "ct") %>%
+  select(genotype, hs_RILs_projection)     %>% rename(Rec = hs_RILs_projection  )
+
+HS_exprm <- inner_join( inner_join( Dev_HS, HS_HS ), Rec_HS)
+
+p <- ggplot( ) + mytheme +
+ geom_point(  data = HS_exprm ,
+              aes( 
+                    y = HS,
+                    x = Rec
+                ),   size = 5, alpha = 0.3) +
+  guides( colour = guide_legend( title = "treatment" ),
+          shape = guide_legend( title = "treatment" )) +
+  theme( legend.position = "bottom"  ) 
+show(p)
+
+cor.test( HS_exprm$HS, HS_exprm$Rec  )
+
+```
+
+
+## AA
+
+```{r}
+p <- ggplot(projection_all %>% filter( genotype == "N2",  experimentype == "Dev" ) ) + mytheme +
+  aes(
+    x = abstime,
+    y = dev_RILs_projection,
+    colour = as.factor(genotype)
+  ) + geom_point(size = 4)
+show(p)
+```
+
